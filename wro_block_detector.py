@@ -271,62 +271,100 @@ def draw_boxes(frame_bgr: np.ndarray, red_box: dict, green_box: dict) -> np.ndar
 # Camera capture
 # ---------------------------------------------------------------------------
 def open_camera(camera_id: int):
+    extra = {"fflags": "nobuffer", "flags": "low_delay"}
     try:
-        container = av.open(f'/dev/video{camera_id}', format='v4l2',
-                             options={'video_size': '640x480', 'framerate': '30', 'input_format': 'mjpeg'})
+        container = av.open(
+            f"/dev/video{camera_id}",
+            format="v4l2",
+            options={"video_size": "640x480", "framerate": "30", "input_format": "mjpeg", **extra},
+        )
         stream = container.streams.video[0]
-        stream.thread_type = 'AUTO'
+        stream.thread_type = "AUTO"
         return container, stream
     except Exception:
         try:
-            container = av.open(f'/dev/video{camera_id}', format='v4l2',
-                                 options={'video_size': '640x480', 'framerate': '30', 'input_format': 'yuyv422'})
+            container = av.open(
+                f"/dev/video{camera_id}",
+                format="v4l2",
+                options={"video_size": "640x480", "framerate": "30", "input_format": "yuyv422", **extra},
+            )
             stream = container.streams.video[0]
-            stream.thread_type = 'AUTO'
+            stream.thread_type = "AUTO"
             return container, stream
         except Exception as e:
             print(f"Camera error: {e}")
             return None, None
+
+def close_container(container):
+    if container is None:
+        return
+    try:
+        container.close()
+    except Exception:
+        pass
 
 def resize_frame(frame: np.ndarray, target_w: int = 240, target_h: int = 240) -> np.ndarray:
     if frame is None or frame.size == 0:
         return None
     return cv2.resize(frame, (target_w, target_h), interpolation=cv2.INTER_AREA)
 
-def start_capture_thread(container, stream, frame_size=240):
+def start_capture_thread(camera_id: int, frame_size=240):
+    """Own the camera in this thread. Skip corrupt packets; reopen on USB/decode death."""
     frame_q = queue.Queue(maxsize=1)
     stop_flag = threading.Event()
+    holder = {"container": None}
+
+    def enqueue(img):
+        if img is None:
+            return
+        if frame_q.full():
+            try:
+                frame_q.get_nowait()
+            except queue.Empty:
+                pass
+        frame_q.put(img)
 
     def capture_loop():
-        try:
-            for packet in container.demux(stream):
-                if stop_flag.is_set():
-                    break
-                for frame in packet.decode():
+        while not stop_flag.is_set():
+            container, stream = open_camera(camera_id)
+            holder["container"] = container
+            if container is None:
+                time.sleep(0.5)
+                continue
+            try:
+                for packet in container.demux(stream):
                     if stop_flag.is_set():
                         break
                     try:
-                        if frame.format.name != 'rgb24':
-                            frame = frame.reformat(format='rgb24')
-                        img = frame.to_ndarray(format='rgb24')
-                        if img is not None and img.size > 0:
-                            img = resize_frame(img, frame_size, frame_size)
-                            if img is not None:
-                                if frame_q.full():
-                                    try:
-                                        frame_q.get_nowait()
-                                    except queue.Empty:
-                                        pass
-                                frame_q.put(img)
-                    except Exception as e:
-                        print(f"Frame processing error: {e}")
+                        decoded = packet.decode()
+                    except av.AVError:
+                        # EINVAL 22 / corrupt MJPEG packet — skip, keep the thread alive
                         continue
-        except Exception as e:
-            print(f"\nCapture thread stopped: {e}")
+                    except Exception:
+                        continue
+                    for frame in decoded:
+                        if stop_flag.is_set():
+                            break
+                        try:
+                            if frame.format.name != "rgb24":
+                                frame = frame.reformat(format="rgb24")
+                            img = frame.to_ndarray(format="rgb24")
+                            if img is not None and img.size > 0:
+                                enqueue(resize_frame(img, frame_size, frame_size))
+                        except Exception:
+                            continue
+            except Exception as e:
+                if not stop_flag.is_set():
+                    print(f"Capture stream dropped ({e}); reopening camera...")
+            finally:
+                close_container(container)
+                holder["container"] = None
+            if not stop_flag.is_set():
+                time.sleep(0.25)
 
     t = threading.Thread(target=capture_loop, daemon=True)
     t.start()
-    return t, frame_q, stop_flag
+    return t, frame_q, stop_flag, holder
 
 def set_manual_camera_controls(camera_id: int, exposure_value: int, wb_temperature: int):
     dev = f'/dev/video{camera_id}'
@@ -359,12 +397,7 @@ def main(camera_id: int = CAMERA_ID, frame_size: int = FRAME_SIZE):
 
     session, input_name, _ = load_onnx_session(ONNX_MODEL_PATH)
 
-    container, stream = open_camera(camera_id)
-    if container is None:
-        print("Cannot open webcam.")
-        return
-
-    t, frame_q, stop_flag = start_capture_thread(container, stream, frame_size)
+    t, frame_q, stop_flag, cam = start_capture_thread(camera_id, frame_size)
 
     def get_frame(timeout=1.0):
         try:
@@ -385,7 +418,7 @@ def main(camera_id: int = CAMERA_ID, frame_size: int = FRAME_SIZE):
         print("No frames received from camera!")
         stop_flag.set()
         t.join(timeout=2.0)
-        container.close()
+        close_container(cam["container"])
         return
 
     window_name = "WRO Block Detector (ONNX)"
@@ -520,7 +553,7 @@ def main(camera_id: int = CAMERA_ID, frame_size: int = FRAME_SIZE):
     finally:
         stop_flag.set()
         t.join(timeout=2.0)
-        container.close()
+        close_container(cam["container"])
         if ser is not None:
             ser.close()
         cv2.destroyAllWindows()
