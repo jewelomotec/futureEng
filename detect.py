@@ -1,81 +1,565 @@
-import cv2
+#!/usr/bin/env python3
+"""
+WRO Future Engineers block detector — ONNX inference version.
+Serial output: commands + CSV coordinates (center_x,center_y,width,height).
+
+Waypoint (this file): when a confirmed block reaches STOP_HEIGHT_PX, freeze
+the robot pose as B, the block as A, and compute pass point C (AC_OFFSET_CM
+laterally). Prints A/B/C and the constant-curvature arc B→C. Sends STOP then
+WAYPOINT over serial. ESP firmware does not consume STOP/WAYPOINT yet.
+"""
+
+import math
+import time
+import threading
+import queue
+import subprocess
 import numpy as np
+import cv2
 import onnxruntime as ort
+from collections import deque
 
-# ── CONFIG ──
-MODEL_PATH  = 'best.onnx'
-LABELS      = ['green', 'red']
-COLORS      = [(0, 255, 0), (0, 0, 255)]  # green, red
-CONF_THRESH = 0.5
-IMG_SIZE    = 640
-# ────────────
+# ---------------------------------------------------------------------------
+# CONFIG
+# ---------------------------------------------------------------------------
+ONNX_MODEL_PATH = "best_ncnn.onnx"
+MODEL_INPUT_SIZE = 224          # keep at 224 — this is what costs inference time
+CLASS_NAMES = {0: "green", 1: "red"}
+CONF_THRESHOLD = 0.55
+USE_CUDA_IF_AVAILABLE = False   # Pi is CPU; True only if you run this on a CUDA box
 
-# Load model
-session = ort.InferenceSession(MODEL_PATH, providers=['CPUExecutionProvider'])
-input_name = session.get_inputs()[0].name
+# Capture is 640x480 MJPEG, then resized to a square for the detector/display.
+CAPTURE_W = 640
+CAPTURE_H = 480
+FRAME_SIZE = 240                # square working frame (not the ONNX input size)
 
-def preprocess(frame):
-    img = cv2.resize(frame, (IMG_SIZE, IMG_SIZE))
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    img = img.astype(np.float32) / 255.0
-    img = np.transpose(img, (2, 0, 1))       # HWC → CHW
-    img = np.expand_dims(img, axis=0)         # add batch dim
-    return img
+CAMERA_ID = 0                    # try 1 if this prints "no frames"
+CAMERA_INDEXES = (0, 1, 2)       # USB cams on a Pi are often video1, not video0
+CAMERA_EXPOSURE = 200
+CAMERA_WB_TEMP = 4500
+SERIAL_PORTS = ("/dev/ttyUSB0", "/dev/ttyUSB1", "/dev/ttyAMA0")
+SERIAL_BAUD = 115200
 
-def postprocess(outputs, orig_w, orig_h):
-    # YOLO26 NMS-free output: (1, 300, 6) → [x1, y1, x2, y2, conf, cls]
-    preds = outputs[0][0]  # shape (300, 6)
-    boxes = []
+# How many recent frames must see the same colour before we trust it.
+VOTE_HISTORY = 7
+MIN_VOTES = 5
+CLEAR_HISTORY = 10              # consecutive CLEAR frames before we drop a waypoint
+
+# Too close — abort / reverse (ESP does not handle REVERSE yet).
+REVERSE_HEIGHT_PX = 80
+
+# ---------------------------------------------------------------------------
+# Waypoint geometry — measure AB_DISTANCE_CM on the table at STOP_HEIGHT_PX
+# ---------------------------------------------------------------------------
+# When box height hits this, treat current robot pose as B and the block as A.
+# Start at 45 px (closer, tighter arc). If the turn to C is too sharp after a
+# run, drop this to 30 so the bot stops farther away and the arc is gentler.
+STOP_HEIGHT_PX = 45  # try 30 if the arc is too tight
+
+# AC: how far beside the block to pass. Red → +X (robot's right), green → -X.
+AC_OFFSET_CM = 25.0
+
+# AB: forward distance (cm) from robot to block when height is STOP_HEIGHT_PX.
+# Tape this at the SAME height you use above. If you change 45 → 30, measure AB
+# again — do not keep the 45 px distance or C will be computed too close.
+AB_DISTANCE_CM = 40.0
+
+# Real pillar height in cm (WRO traffic-sign / pillar). Used only for lateral (X)
+# similar-triangles. Depth Y uses AB_DISTANCE_CM scaled by STOP_HEIGHT_PX/height.
+REAL_BLOCK_HEIGHT_CM = 10.0
+
+# ---------------------------------------------------------------------------
+# ONNX session setup
+# ---------------------------------------------------------------------------
+def load_onnx_session(model_path: str) -> tuple:
+    providers = ["CPUExecutionProvider"]
+    if USE_CUDA_IF_AVAILABLE and "CUDAExecutionProvider" in ort.get_available_providers():
+        providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+    session = ort.InferenceSession(model_path, providers=providers)
+    input_name = session.get_inputs()[0].name
+    output_names = [o.name for o in session.get_outputs()]
+    print(f"Loaded ONNX model '{model_path}' | providers={session.get_providers()} "
+          f"| input={input_name} | outputs={output_names}")
+    return session, input_name, output_names
+
+# ---------------------------------------------------------------------------
+# Preprocessing — letterbox to a square, track scale/offset to map boxes back
+# ---------------------------------------------------------------------------
+def preprocess(frame: np.ndarray, size: int) -> tuple:
+    h, w = frame.shape[:2]
+    scale = size / max(h, w)
+    nh, nw = int(h * scale), int(w * scale)
+    resized = cv2.resize(frame, (nw, nh))
+    canvas = np.full((size, size, 3), 114, dtype=np.uint8)
+    top = (size - nh) // 2
+    left = (size - nw) // 2
+    canvas[top:top + nh, left:left + nw] = resized
+
+    tensor = canvas.astype(np.float32) / 255.0
+    tensor = tensor.transpose(2, 0, 1)          # HWC -> CHW
+    tensor = np.expand_dims(tensor, axis=0)     # -> NCHW
+    return np.ascontiguousarray(tensor), scale, left, top
+
+# ---------------------------------------------------------------------------
+# Postprocessing — decode Ultralytics-style output + NMS, map back to frame
+# ---------------------------------------------------------------------------
+def decode_onnx_output(raw_output: np.ndarray, scale: float, left: int, top: int,
+                        conf_thresh: float) -> dict:
+    """raw_output: (1, 300, 6) -> [x1,y1,x2,y2,conf,cls_id]."""
+    preds = raw_output[0]   # (300, 6)
+
+    best_per_class = {}
     for pred in preds:
         x1, y1, x2, y2, conf, cls_id = pred
-        if conf < CONF_THRESH:
+        if conf < conf_thresh:
             continue
-        # Scale back to original frame size
-        x1 = int(x1 / IMG_SIZE * orig_w)
-        y1 = int(y1 / IMG_SIZE * orig_h)
-        x2 = int(x2 / IMG_SIZE * orig_w)
-        y2 = int(y2 / IMG_SIZE * orig_h)
-        boxes.append((x1, y1, x2, y2, float(conf), int(cls_id)))
-    return boxes
+        cls_id = int(cls_id)
+        if cls_id not in best_per_class or conf > best_per_class[cls_id][0]:
+            best_per_class[cls_id] = (float(conf), x1, y1, x2, y2)
 
-def draw(frame, boxes):
-    for x1, y1, x2, y2, conf, cls_id in boxes:
-        color = COLORS[cls_id] if cls_id < len(COLORS) else (255,255,255)
-        label = f"{LABELS[cls_id]} {conf:.2f}"
-        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-        cv2.putText(frame, label, (x1, y1 - 8),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-    return frame
+    results = {}
+    for cls_id, (conf, x1, y1, x2, y2) in best_per_class.items():
+        color = CLASS_NAMES.get(cls_id)
+        if color is None:
+            continue
+        ox1 = (x1 - left) / scale
+        oy1 = (y1 - top) / scale
+        ox2 = (x2 - left) / scale
+        oy2 = (y2 - top) / scale
+        ow = ox2 - ox1
+        oh = oy2 - oy1
 
-# ── Main loop ──
-cap = cv2.VideoCapture(0)
+        results[color] = {
+            "x": int(round(ox1)), "y": int(round(oy1)),
+            "width": int(round(ow)), "height": int(round(oh)),
+            "center_x": int(round(ox1 + ow / 2)), "center_y": int(round(oy1 + oh / 2)),
+            "confidence": conf,
+        }
+    return results
 
-if not cap.isOpened():
-    print("Cannot open camera")
-    exit()
+def detect_blocks_onnx(frame: np.ndarray, session, input_name: str) -> tuple:
+    tensor, scale, left, top = preprocess(frame, MODEL_INPUT_SIZE)
+    outputs = session.run(None, {input_name: tensor})
+    decoded = decode_onnx_output(outputs[0], scale, left, top, CONF_THRESHOLD)
+    return decoded.get("red"), decoded.get("green")
 
-print("Running... press 'q' to quit")
+# ---------------------------------------------------------------------------
+# Waypoint: A = block, B = robot at stop, C = pass point beside A
+# Robot frame at freeze: B = (0, 0), +X = right, +Y = forward (camera axis)
+# ---------------------------------------------------------------------------
+def block_to_robot_xy(box: dict, frame_size: int) -> tuple:
+    """Map a detection to robot-frame centimetres (A relative to B)."""
+    h = max(int(box["height"]), 1)
+    cx = float(box["center_x"])
+    ccx = frame_size / 2.0
 
-while True:
-    ret, frame = cap.read()
-    if not ret:
-        break
+    # 640x480 squeezed to a square: width pixels are stretched vs height pixels.
+    x_aspect = CAPTURE_W / float(CAPTURE_H)
 
-    orig_h, orig_w = frame.shape[:2]
-    inp = preprocess(frame)
-    outputs = session.run(None, {input_name: inp})
-    boxes = postprocess(outputs, orig_w, orig_h)
-    frame = draw(frame, boxes)
+    # Depth from the calibrated AB at STOP_HEIGHT_PX, scaled if we trigger late/early.
+    y_a = AB_DISTANCE_CM * (STOP_HEIGHT_PX / float(h))
 
-    # Show count
-    green_count = sum(1 for *_, cls_id in boxes if cls_id == 0)
-    red_count   = sum(1 for *_, cls_id in boxes if cls_id == 1)
-    cv2.putText(frame, f"Green: {green_count}  Red: {red_count}",
-                (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,255,255), 2)
+    # Lateral from similar triangles, using real pillar height vs box height.
+    x_a = (cx - ccx) * x_aspect * (REAL_BLOCK_HEIGHT_CM / float(h))
+    return x_a, y_a
 
-    cv2.imshow("WRO Block Detector", frame)
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
 
-cap.release()
-cv2.destroyAllWindows()
+def pass_point_c(x_a: float, y_a: float, color: str) -> tuple:
+    """C is AC_OFFSET_CM horizontally from A. Red = pass right, green = pass left."""
+    side = 1.0 if color == "red" else -1.0
+    return x_a + side * AC_OFFSET_CM, y_a
+
+
+def arc_b_to_c(x_c: float, y_c: float) -> dict:
+    """
+    Constant-curvature forward arc from B=(0,0) heading +Y to C=(x_c, y_c).
+    Signed radius: + = right turn, - = left. Infinite radius = drive straight.
+    """
+    dist_sq = x_c * x_c + y_c * y_c
+    dist = math.sqrt(dist_sq)
+
+    if abs(x_c) < 0.5:
+        return {
+            "radius_cm": float("inf"),
+            "theta_deg": 0.0,
+            "arc_len_cm": abs(y_c),
+            "turn": "straight",
+        }
+
+    radius = dist_sq / (2.0 * x_c)
+    theta_rad = 2.0 * math.atan2(x_c, y_c) if y_c != 0 else math.copysign(math.pi, x_c)
+    arc_len = abs(radius * theta_rad)
+    return {
+        "radius_cm": radius,
+        "theta_deg": math.degrees(theta_rad),
+        "arc_len_cm": arc_len,
+        "turn": "right" if radius > 0 else "left",
+        "chord_cm": dist,
+    }
+
+
+def compute_waypoint(box: dict, color: str, frame_size: int) -> dict:
+    x_a, y_a = block_to_robot_xy(box, frame_size)
+    x_c, y_c = pass_point_c(x_a, y_a, color)
+    arc = arc_b_to_c(x_c, y_c)
+    wp = {
+        "color": color,
+        "A_cm": (x_a, y_a),
+        "B_cm": (0.0, 0.0),
+        "C_cm": (x_c, y_c),
+        "AC_cm": AC_OFFSET_CM,
+        "AB_cm": math.hypot(x_a, y_a),
+        "box": {
+            "center_x": box["center_x"],
+            "center_y": box["center_y"],
+            "width": box["width"],
+            "height": box["height"],
+        },
+        **arc,
+    }
+    return wp
+
+
+def format_waypoint_line(wp: dict) -> str:
+    xa, ya = wp["A_cm"]
+    xc, yc = wp["C_cm"]
+    r = wp["radius_cm"]
+    r_str = "inf" if math.isinf(r) else f"{r:.1f}"
+    return (
+        f"WAYPOINT,{wp['color']},{xa:.1f},{ya:.1f},{xc:.1f},{yc:.1f},"
+        f"{r_str},{wp['theta_deg']:.1f},{wp['arc_len_cm']:.1f}\n"
+    )
+
+
+def print_waypoint(wp: dict) -> None:
+    xa, ya = wp["A_cm"]
+    xc, yc = wp["C_cm"]
+    r = wp["radius_cm"]
+    r_str = "straight" if math.isinf(r) else f"{r:.1f} cm ({wp['turn']})"
+    print(
+        f"WAYPOINT lock color={wp['color']} "
+        f"A=({xa:.1f},{ya:.1f}) cm  B=(0,0)  C=({xc:.1f},{yc:.1f}) cm  "
+        f"arc R={r_str}  theta={wp['theta_deg']:.1f} deg  len={wp['arc_len_cm']:.1f} cm"
+    )
+
+# ---------------------------------------------------------------------------
+# Display helpers
+# ---------------------------------------------------------------------------
+def upscale_for_display(frame_bgr: np.ndarray, scale: int = 3) -> np.ndarray:
+    h, w = frame_bgr.shape[:2]
+    return cv2.resize(frame_bgr, (w * scale, h * scale), interpolation=cv2.INTER_NEAREST)
+
+def draw_boxes(frame_bgr: np.ndarray, red_box: dict, green_box: dict) -> np.ndarray:
+    out = frame_bgr.copy()
+    for box, bgr_color, label in ((red_box, (0, 0, 255), "RED"), (green_box, (0, 255, 0), "GREEN")):
+        if not box:
+            continue
+        x, y, w, h = box['x'], box['y'], box['width'], box['height']
+        cx, cy = box['center_x'], box['center_y']
+        cv2.rectangle(out, (x, y), (x + w, y + h), bgr_color, 2)
+        cv2.circle(out, (cx, cy), 3, bgr_color, -1)
+        conf = box.get('confidence')
+        conf_str = f" conf={conf:.2f}" if conf is not None else ""
+        cv2.putText(out, f"{label} {w}x{h}px{conf_str}", (x, max(0, y - 22)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, bgr_color, 1)
+        cv2.putText(out, f"pos=({x},{y}) center=({cx},{cy})", (x, max(0, y - 8)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.3, bgr_color, 1)
+    return out
+
+# ---------------------------------------------------------------------------
+# Camera capture (OpenCV — more reliable on Pi USB webcams than PyAV)
+# ---------------------------------------------------------------------------
+def resize_frame(frame: np.ndarray, target_w: int = 240, target_h: int = 240) -> np.ndarray:
+    if frame is None or frame.size == 0:
+        return None
+    return cv2.resize(frame, (target_w, target_h), interpolation=cv2.INTER_AREA)
+
+def open_opencv_camera(index: int):
+    cap = cv2.VideoCapture(index, cv2.CAP_V4L2)
+    if not cap.isOpened():
+        cap.release()
+        cap = cv2.VideoCapture(index)
+    if not cap.isOpened():
+        return None
+    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    ok, frame = cap.read()
+    if not ok or frame is None:
+        cap.release()
+        return None
+    print(f"Camera opened: index {index}, frame {frame.shape[1]}x{frame.shape[0]}")
+    return cap
+
+def start_capture_thread(camera_id: int, frame_size=240):
+    frame_q = queue.Queue(maxsize=1)
+    stop_flag = threading.Event()
+    holder = {"cap": None}
+
+    def enqueue(img):
+        if img is None:
+            return
+        if frame_q.full():
+            try:
+                frame_q.get_nowait()
+            except queue.Empty:
+                pass
+        frame_q.put(img)
+
+    def capture_loop():
+        indexes = []
+        for i in (camera_id,) + CAMERA_INDEXES:
+            if i not in indexes:
+                indexes.append(i)
+
+        while not stop_flag.is_set():
+            cap = None
+            for idx in indexes:
+                if stop_flag.is_set():
+                    break
+                cap = open_opencv_camera(idx)
+                if cap is not None:
+                    holder["cap"] = cap
+                    set_manual_camera_controls(idx, CAMERA_EXPOSURE, CAMERA_WB_TEMP)
+                    break
+            if cap is None:
+                print(
+                    "No camera frames. Is another detect.py still running? "
+                    "Try: pkill -f detect.py   and check: ls /dev/video*"
+                )
+                time.sleep(2.0)
+                continue
+            try:
+                while not stop_flag.is_set():
+                    ok, frame = cap.read()
+                    if not ok or frame is None:
+                        print("Camera read failed; reopening...")
+                        break
+                    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    enqueue(resize_frame(rgb, frame_size, frame_size))
+            finally:
+                try:
+                    cap.release()
+                except Exception:
+                    pass
+                holder["cap"] = None
+            if not stop_flag.is_set():
+                time.sleep(0.4)
+
+    t = threading.Thread(target=capture_loop, daemon=True)
+    t.start()
+    return t, frame_q, stop_flag, holder
+
+def set_manual_camera_controls(camera_id: int, exposure_value: int, wb_temperature: int):
+    dev = f'/dev/video{camera_id}'
+    cmds = [
+        ['v4l2-ctl', '-d', dev, '-c', 'auto_exposure=1'],
+        ['v4l2-ctl', '-d', dev, '-c', f'exposure_time_absolute={exposure_value}'],
+        ['v4l2-ctl', '-d', dev, '-c', 'white_balance_automatic=0'],
+        ['v4l2-ctl', '-d', dev, '-c', f'white_balance_temperature={wb_temperature}'],
+    ]
+    for cmd in cmds:
+        try:
+            subprocess.run(cmd, check=True)
+        except subprocess.CalledProcessError as e:
+            print(f"Warning: could not run {' '.join(cmd)} ({e})")
+    print(f"Camera controls locked: exposure={exposure_value}, wb_temp={wb_temperature}")
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+def main(camera_id: int = CAMERA_ID, frame_size: int = FRAME_SIZE):
+    set_manual_camera_controls(camera_id, CAMERA_EXPOSURE, CAMERA_WB_TEMP)
+
+    ser = None
+    try:
+        import serial
+        last_err = None
+        for port in SERIAL_PORTS:
+            try:
+                ser = serial.Serial(port, SERIAL_BAUD, timeout=1)
+                print(f"Serial port opened: {port}")
+                break
+            except Exception as e:
+                last_err = e
+                ser = None
+        if ser is None:
+            print(f"Could not open serial port: {last_err}")
+    except Exception as e:
+        print(f"Could not open serial port: {e}")
+        ser = None
+
+    session, input_name, _ = load_onnx_session(ONNX_MODEL_PATH)
+
+    t, frame_q, stop_flag, cam = start_capture_thread(camera_id, frame_size)
+
+    def get_frame(timeout=1.0):
+        try:
+            return frame_q.get(timeout=timeout)
+        except queue.Empty:
+            return None
+
+    print("Testing camera...")
+    test_frames = 0
+    for _ in range(15):
+        frame = get_frame(timeout=1.0)
+        if frame is not None:
+            test_frames += 1
+            print(f"Got test frame {test_frames}, shape: {frame.shape}")
+            break
+
+    if test_frames == 0:
+        print("No frames received from camera!")
+        print("Run:  pkill -f detect.py ; ls -l /dev/video*")
+        print("Then try CAMERA_ID = 1 at the top of this file.")
+        stop_flag.set()
+        t.join(timeout=2.0)
+        if cam.get("cap") is not None:
+            cam["cap"].release()
+        return
+
+    window_name = "WRO Block Detector (ONNX)"
+    cv2.namedWindow(window_name)
+
+    red_hist = deque(maxlen=VOTE_HISTORY)
+    green_hist = deque(maxlen=VOTE_HISTORY)
+
+    last_sent = None
+    frame_count = 0
+    clear_counter = 0
+    waypoint_lock = None   # frozen A/B/C until the block is gone (CLEAR)
+
+    try:
+        while True:
+            frame = get_frame(timeout=0.5)
+            if frame is None:
+                continue
+
+            red_box, green_box = detect_blocks_onnx(frame, session, input_name)
+            red_hist.append(red_box)
+            green_hist.append(green_box)
+
+            def confirmed(hist):
+                return sum(1 for b in hist if b is not None) >= MIN_VOTES
+
+            red_confirmed = confirmed(red_hist)
+            green_confirmed = confirmed(green_hist)
+
+            primary_box = None
+            primary_color = None
+            if red_confirmed and green_confirmed:
+                if red_box is not None and green_box is not None:
+                    primary_box, primary_color = (red_box, 'red') if red_box['height'] >= green_box['height'] else (green_box, 'green')
+                elif red_box is not None:
+                    primary_box, primary_color = red_box, 'red'
+                elif green_box is not None:
+                    primary_box, primary_color = green_box, 'green'
+            elif red_confirmed:
+                primary_box, primary_color = red_box, 'red'
+            elif green_confirmed:
+                primary_box, primary_color = green_box, 'green'
+
+            # ---- Decision: ignore until stop height, then freeze C; reverse if too close ----
+            decision = 'CLEAR'
+            active_box = None
+
+            if primary_box is not None:
+                block_height = primary_box['height']
+                if block_height > REVERSE_HEIGHT_PX:
+                    decision = 'REVERSE'
+                    active_box = primary_box
+                elif block_height >= STOP_HEIGHT_PX:
+                    decision = 'STOP'
+                    active_box = primary_box
+
+            # Freeze A/B/C once at STOP_HEIGHT_PX; hold until CLEAR. REVERSE still aborts.
+            if decision == 'STOP' and waypoint_lock is None and active_box is not None and primary_color:
+                waypoint_lock = compute_waypoint(active_box, primary_color, frame_size)
+                print_waypoint(waypoint_lock)
+            elif decision == 'REVERSE':
+                waypoint_lock = None
+            elif waypoint_lock is not None and decision != 'CLEAR':
+                decision = 'STOP'
+                active_box = active_box or waypoint_lock.get("box")
+
+            clear_counter = clear_counter + 1 if decision == 'CLEAR' else 0
+            if decision == 'CLEAR' and clear_counter >= CLEAR_HISTORY:
+                waypoint_lock = None
+
+            # ---- Build serial command string ----
+            if decision == 'REVERSE' and active_box is not None:
+                cmd_str = f"{decision},{active_box['center_x']},{active_box['center_y']},{active_box['width']},{active_box['height']}\n"
+            elif decision == 'STOP' and waypoint_lock is not None:
+                cmd_str = format_waypoint_line(waypoint_lock)
+            else:
+                cmd_str = "CLEAR\n"
+
+            # ---- Send over serial if command changed ----
+            if cmd_str != last_sent and ser is not None:
+                if not (decision == 'CLEAR' and clear_counter < CLEAR_HISTORY):  # debounce CLEAR
+                    try:
+                        if decision == 'STOP' and waypoint_lock is not None:
+                            stop_box = waypoint_lock["box"]
+                            stop_line = (
+                                f"STOP,{stop_box['center_x']},{stop_box['center_y']},"
+                                f"{stop_box['width']},{stop_box['height']}\n"
+                            )
+                            ser.write(stop_line.encode())
+                            print(f">>> Sent {stop_line.strip()}")
+                        ser.write(cmd_str.encode())
+                        print(f">>> Sent {cmd_str.strip()}")
+                        last_sent = cmd_str
+                    except Exception as e:
+                        print(f"Serial write failed: {e}")
+
+            # Display drawing (unchanged)
+            display_red = red_box if red_confirmed else None
+            display_green = green_box if green_confirmed else None
+            bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            display = draw_boxes(bgr, display_red, display_green)
+
+            h_now = primary_box['height'] if primary_box else 0
+            cv2.putText(
+                display,
+                f"h={h_now} stop={STOP_HEIGHT_PX} rev={REVERSE_HEIGHT_PX}",
+                (2, 12),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1,
+            )
+
+            if waypoint_lock is not None:
+                xc, yc = waypoint_lock["C_cm"]
+                cv2.putText(
+                    display,
+                    f"STOP {waypoint_lock['color']} C=({xc:.0f},{yc:.0f})cm",
+                    (2, frame_size - 24),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 255, 255), 1,
+                )
+
+            display = upscale_for_display(display, scale=3)
+            cv2.imshow(window_name, display)
+            frame_count += 1
+
+            print(f"Frame {frame_count} | {decision} | RED:{red_box} | GREEN:{green_box}", flush=True)
+
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('q'):
+                break
+
+    except KeyboardInterrupt:
+        pass
+    finally:
+        stop_flag.set()
+        t.join(timeout=2.0)
+        if cam.get("cap") is not None:
+            try:
+                cam["cap"].release()
+            except Exception:
+                pass
+        if ser is not None:
+            ser.close()
+        cv2.destroyAllWindows()
+
+if __name__ == "__main__":
+    main()

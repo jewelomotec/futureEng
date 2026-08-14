@@ -16,7 +16,6 @@ import queue
 import subprocess
 import numpy as np
 import cv2
-import av
 import onnxruntime as ort
 from collections import deque
 
@@ -34,10 +33,11 @@ CAPTURE_W = 640
 CAPTURE_H = 480
 FRAME_SIZE = 240                # square working frame (not the ONNX input size)
 
-CAMERA_ID = 0
+CAMERA_ID = 0                    # try 1 if this prints "no frames"
+CAMERA_INDEXES = (0, 1, 2)       # USB cams on a Pi are often video1, not video0
 CAMERA_EXPOSURE = 200
 CAMERA_WB_TEMP = 4500
-SERIAL_PORT = "/dev/ttyUSB1"
+SERIAL_PORTS = ("/dev/ttyUSB0", "/dev/ttyUSB1", "/dev/ttyAMA0")
 SERIAL_BAUD = 115200
 
 # How many recent frames must see the same colour before we trust it.
@@ -268,64 +268,35 @@ def draw_boxes(frame_bgr: np.ndarray, red_box: dict, green_box: dict) -> np.ndar
     return out
 
 # ---------------------------------------------------------------------------
-# Camera capture
+# Camera capture (OpenCV — more reliable on Pi USB webcams than PyAV)
 # ---------------------------------------------------------------------------
-def _is_camera_busy(exc) -> bool:
-    if getattr(exc, "errno", None) == 16:
-        return True
-    text = str(exc).lower()
-    return "busy" in text or "errno 16" in text
-
-def open_camera(camera_id: int):
-    extra = {"fflags": "nobuffer", "flags": "low_delay"}
-    device = f"/dev/video{camera_id}"
-    try:
-        container = av.open(
-            device,
-            format="v4l2",
-            options={"video_size": "640x480", "framerate": "30", "input_format": "mjpeg", **extra},
-        )
-        stream = container.streams.video[0]
-        stream.thread_type = "AUTO"
-        return container, stream
-    except Exception as first:
-        if _is_camera_busy(first):
-            print(
-                f"Camera busy ({device}). Another program still has it open — "
-                f"stop the old detector (Ctrl+C) or run: pkill -f wro_block_detector"
-            )
-            return None, None
-        try:
-            container = av.open(
-                device,
-                format="v4l2",
-                options={"video_size": "640x480", "framerate": "30", "input_format": "yuyv422", **extra},
-            )
-            stream = container.streams.video[0]
-            stream.thread_type = "AUTO"
-            return container, stream
-        except Exception as e:
-            print(f"Camera error: {e}")
-            return None, None
-
-def close_container(container):
-    if container is None:
-        return
-    try:
-        container.close()
-    except Exception:
-        pass
-
 def resize_frame(frame: np.ndarray, target_w: int = 240, target_h: int = 240) -> np.ndarray:
     if frame is None or frame.size == 0:
         return None
     return cv2.resize(frame, (target_w, target_h), interpolation=cv2.INTER_AREA)
 
+def open_opencv_camera(index: int):
+    cap = cv2.VideoCapture(index, cv2.CAP_V4L2)
+    if not cap.isOpened():
+        cap.release()
+        cap = cv2.VideoCapture(index)
+    if not cap.isOpened():
+        return None
+    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    ok, frame = cap.read()
+    if not ok or frame is None:
+        cap.release()
+        return None
+    print(f"Camera opened: index {index}, frame {frame.shape[1]}x{frame.shape[0]}")
+    return cap
+
 def start_capture_thread(camera_id: int, frame_size=240):
-    """Own the camera in this thread. Skip corrupt packets; reopen on USB/decode death."""
     frame_q = queue.Queue(maxsize=1)
     stop_flag = threading.Event()
-    holder = {"container": None}
+    holder = {"cap": None}
 
     def enqueue(img):
         if img is None:
@@ -338,42 +309,44 @@ def start_capture_thread(camera_id: int, frame_size=240):
         frame_q.put(img)
 
     def capture_loop():
+        indexes = []
+        for i in (camera_id,) + CAMERA_INDEXES:
+            if i not in indexes:
+                indexes.append(i)
+
         while not stop_flag.is_set():
-            container, stream = open_camera(camera_id)
-            holder["container"] = container
-            if container is None:
+            cap = None
+            for idx in indexes:
+                if stop_flag.is_set():
+                    break
+                cap = open_opencv_camera(idx)
+                if cap is not None:
+                    holder["cap"] = cap
+                    set_manual_camera_controls(idx, CAMERA_EXPOSURE, CAMERA_WB_TEMP)
+                    break
+            if cap is None:
+                print(
+                    "No camera frames. Is another detect.py still running? "
+                    "Try: pkill -f detect.py   and check: ls /dev/video*"
+                )
                 time.sleep(2.0)
                 continue
             try:
-                for packet in container.demux(stream):
-                    if stop_flag.is_set():
+                while not stop_flag.is_set():
+                    ok, frame = cap.read()
+                    if not ok or frame is None:
+                        print("Camera read failed; reopening...")
                         break
-                    try:
-                        decoded = packet.decode()
-                    except av.AVError:
-                        # EINVAL 22 / corrupt MJPEG packet — skip, keep the thread alive
-                        continue
-                    except Exception:
-                        continue
-                    for frame in decoded:
-                        if stop_flag.is_set():
-                            break
-                        try:
-                            if frame.format.name != "rgb24":
-                                frame = frame.reformat(format="rgb24")
-                            img = frame.to_ndarray(format="rgb24")
-                            if img is not None and img.size > 0:
-                                enqueue(resize_frame(img, frame_size, frame_size))
-                        except Exception:
-                            continue
-            except Exception as e:
-                if not stop_flag.is_set():
-                    print(f"Capture stream dropped ({e}); reopening camera...")
+                    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    enqueue(resize_frame(rgb, frame_size, frame_size))
             finally:
-                close_container(container)
-                holder["container"] = None
+                try:
+                    cap.release()
+                except Exception:
+                    pass
+                holder["cap"] = None
             if not stop_flag.is_set():
-                time.sleep(0.5)
+                time.sleep(0.4)
 
     t = threading.Thread(target=capture_loop, daemon=True)
     t.start()
@@ -400,10 +373,20 @@ def set_manual_camera_controls(camera_id: int, exposure_value: int, wb_temperatu
 def main(camera_id: int = CAMERA_ID, frame_size: int = FRAME_SIZE):
     set_manual_camera_controls(camera_id, CAMERA_EXPOSURE, CAMERA_WB_TEMP)
 
+    ser = None
     try:
         import serial
-        ser = serial.Serial(SERIAL_PORT, SERIAL_BAUD, timeout=1)
-        print(f"Serial port opened: {SERIAL_PORT}")
+        last_err = None
+        for port in SERIAL_PORTS:
+            try:
+                ser = serial.Serial(port, SERIAL_BAUD, timeout=1)
+                print(f"Serial port opened: {port}")
+                break
+            except Exception as e:
+                last_err = e
+                ser = None
+        if ser is None:
+            print(f"Could not open serial port: {last_err}")
     except Exception as e:
         print(f"Could not open serial port: {e}")
         ser = None
@@ -420,18 +403,21 @@ def main(camera_id: int = CAMERA_ID, frame_size: int = FRAME_SIZE):
 
     print("Testing camera...")
     test_frames = 0
-    for _ in range(10):
-        frame = get_frame(timeout=2.0)
+    for _ in range(15):
+        frame = get_frame(timeout=1.0)
         if frame is not None:
             test_frames += 1
             print(f"Got test frame {test_frames}, shape: {frame.shape}")
-        time.sleep(0.1)
+            break
 
     if test_frames == 0:
         print("No frames received from camera!")
+        print("Run:  pkill -f detect.py ; ls -l /dev/video*")
+        print("Then try CAMERA_ID = 1 at the top of this file.")
         stop_flag.set()
         t.join(timeout=2.0)
-        close_container(cam["container"])
+        if cam.get("cap") is not None:
+            cam["cap"].release()
         return
 
     window_name = "WRO Block Detector (ONNX)"
@@ -566,7 +552,11 @@ def main(camera_id: int = CAMERA_ID, frame_size: int = FRAME_SIZE):
     finally:
         stop_flag.set()
         t.join(timeout=2.0)
-        close_container(cam["container"])
+        if cam.get("cap") is not None:
+            try:
+                cam["cap"].release()
+            except Exception:
+                pass
         if ser is not None:
             ser.close()
         cv2.destroyAllWindows()
