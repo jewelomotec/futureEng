@@ -21,27 +21,32 @@ import onnxruntime as ort
 from collections import deque
 
 # ---------------------------------------------------------------------------
-# CONFIG — edit to match your ONNX export
+# CONFIG
 # ---------------------------------------------------------------------------
 ONNX_MODEL_PATH = "best_ncnn.onnx"
-MODEL_INPUT_SIZE = 224
-CLASS_NAMES = {0: "green", 1: "red"}   # class index -> color name
-CONF_THRESHOLD = 0.6
-USE_CUDA_IF_AVAILABLE = True
+MODEL_INPUT_SIZE = 224          # keep at 224 — this is what costs inference time
+CLASS_NAMES = {0: "green", 1: "red"}
+CONF_THRESHOLD = 0.55
+USE_CUDA_IF_AVAILABLE = False   # Pi is CPU; True only if you run this on a CUDA box
 
-# Danger zone / navigation thresholds
-MIN_SWERVE_HEIGHT = 25
-REVERSE_HEIGHT = 80
-LEFT_SIDE_MAX = 90
-RIGHT_SIDE_MIN = 150
-
-MIN_VOTES_HIGH_CONF = 5
-MIN_VOTES_LOW_CONF = 6
-CONFIDENCE_FLOOR = 0.55   # ONNX score below this counts as "low confidence" for voting
-
-# Capture is 640x480 MJPEG, then resized to a square (default 240x240).
+# Capture is 640x480 MJPEG, then resized to a square for the detector/display.
 CAPTURE_W = 640
 CAPTURE_H = 480
+FRAME_SIZE = 240                # square working frame (not the ONNX input size)
+
+CAMERA_ID = 0
+CAMERA_EXPOSURE = 200
+CAMERA_WB_TEMP = 4500
+SERIAL_PORT = "/dev/ttyUSB1"
+SERIAL_BAUD = 115200
+
+# How many recent frames must see the same colour before we trust it.
+VOTE_HISTORY = 7
+MIN_VOTES = 5
+CLEAR_HISTORY = 10              # consecutive CLEAR frames before we drop a waypoint
+
+# Too close — abort / reverse (ESP does not handle REVERSE yet).
+REVERSE_HEIGHT_PX = 80
 
 # ---------------------------------------------------------------------------
 # Waypoint geometry — measure AB_DISTANCE_CM on the table at STOP_HEIGHT_PX
@@ -130,7 +135,6 @@ def decode_onnx_output(raw_output: np.ndarray, scale: float, left: int, top: int
             "width": int(round(ow)), "height": int(round(oh)),
             "center_x": int(round(ox1 + ow / 2)), "center_y": int(round(oy1 + oh / 2)),
             "confidence": conf,
-            "low_confidence": conf < CONFIDENCE_FLOOR,
         }
     return results
 
@@ -150,10 +154,10 @@ def block_to_robot_xy(box: dict, frame_size: int) -> tuple:
     cx = float(box["center_x"])
     ccx = frame_size / 2.0
 
-    # 640x480 → square stretch: X pixels are not the same metric as height pixels.
-    x_aspect = (CAPTURE_W / float(frame_size)) / (CAPTURE_H / float(frame_size))
+    # 640x480 squeezed to a square: width pixels are stretched vs height pixels.
+    x_aspect = CAPTURE_W / float(CAPTURE_H)
 
-    # Depth from the calibrated AB at 45 px, scaled if we trigger a bit late/early.
+    # Depth from the calibrated AB at STOP_HEIGHT_PX, scaled if we trigger late/early.
     y_a = AB_DISTANCE_CM * (STOP_HEIGHT_PX / float(h))
 
     # Lateral from similar triangles, using real pillar height vs box height.
@@ -324,7 +328,7 @@ def start_capture_thread(container, stream, frame_size=240):
     t.start()
     return t, frame_q, stop_flag
 
-def set_manual_camera_controls(camera_id: int, exposure_value: int = 156, wb_temperature: int = 4500):
+def set_manual_camera_controls(camera_id: int, exposure_value: int, wb_temperature: int):
     dev = f'/dev/video{camera_id}'
     cmds = [
         ['v4l2-ctl', '-d', dev, '-c', 'auto_exposure=1'],
@@ -340,47 +344,15 @@ def set_manual_camera_controls(camera_id: int, exposure_value: int = 156, wb_tem
     print(f"Camera controls locked: exposure={exposure_value}, wb_temp={wb_temperature}")
 
 # ---------------------------------------------------------------------------
-# Kalman filter
-# ---------------------------------------------------------------------------
-def create_kalman_filter():
-    kf = cv2.KalmanFilter(4, 2, 0, type=cv2.CV_64F)
-    kf.measurementMatrix = np.array([[1, 0, 0, 0], [0, 1, 0, 0]], np.float64)
-    kf.transitionMatrix = np.array([[1, 0, 1, 0], [0, 1, 0, 1], [0, 0, 1, 0], [0, 0, 0, 1]], np.float64)
-    kf.processNoiseCov = np.eye(4, dtype=np.float64) * 0.03
-    kf.measurementNoiseCov = np.eye(2, dtype=np.float64) * 1.0
-    return kf
-
-def kalman_update(kf, box, initialized: bool):
-    if box is not None:
-        measurement = np.array([[np.float64(box['center_x'])], [np.float64(box['center_y'])]])
-        if not initialized:
-            kf.statePre = np.array([[box['center_x']], [box['center_y']], [0], [0]], np.float64)
-            kf.statePost = np.array([[box['center_x']], [box['center_y']], [0], [0]], np.float64)
-            initialized = True
-        else:
-            kf.predict()
-        kf.correct(measurement)
-        smoothed = {'center_x': int(kf.statePost[0, 0]), 'center_y': int(kf.statePost[1, 0]),
-                    'vx': float(kf.statePost[2, 0]), 'vy': float(kf.statePost[3, 0])}
-        return smoothed, initialized
-    else:
-        if not initialized:
-            return None, initialized
-        predicted = kf.predict()
-        smoothed = {'center_x': int(predicted[0, 0]), 'center_y': int(predicted[1, 0]),
-                    'vx': float(predicted[2, 0]), 'vy': float(predicted[3, 0])}
-        return smoothed, initialized
-
-# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
-def main(camera_id: int = 0, frame_size: int = 240):
-    set_manual_camera_controls(camera_id, exposure_value=200, wb_temperature=4500)
+def main(camera_id: int = CAMERA_ID, frame_size: int = FRAME_SIZE):
+    set_manual_camera_controls(camera_id, CAMERA_EXPOSURE, CAMERA_WB_TEMP)
 
     try:
         import serial
-        ser = serial.Serial('/dev/ttyUSB1', 115200, timeout=1)
-        print("Serial port opened")
+        ser = serial.Serial(SERIAL_PORT, SERIAL_BAUD, timeout=1)
+        print(f"Serial port opened: {SERIAL_PORT}")
     except Exception as e:
         print(f"Could not open serial port: {e}")
         ser = None
@@ -419,18 +391,12 @@ def main(camera_id: int = 0, frame_size: int = 240):
     window_name = "WRO Block Detector (ONNX)"
     cv2.namedWindow(window_name)
 
-    history_len = 7
-    red_hist = deque(maxlen=history_len)
-    green_hist = deque(maxlen=history_len)
-
-    kf = create_kalman_filter()
-    kf_initialized = False
-    kf_color = None   # tracks 'red' / 'green' / None — NOT the zone decision
+    red_hist = deque(maxlen=VOTE_HISTORY)
+    green_hist = deque(maxlen=VOTE_HISTORY)
 
     last_sent = None
     frame_count = 0
     clear_counter = 0
-    CLEAR_HISTORY = 10
     waypoint_lock = None   # frozen A/B/C until the block is gone (CLEAR)
 
     try:
@@ -444,12 +410,7 @@ def main(camera_id: int = 0, frame_size: int = 240):
             green_hist.append(green_box)
 
             def confirmed(hist):
-                boxes = [b for b in hist if b is not None]
-                if not boxes:
-                    return False
-                latest = boxes[-1]
-                required = MIN_VOTES_LOW_CONF if latest.get('low_confidence') else MIN_VOTES_HIGH_CONF
-                return len(boxes) >= required
+                return sum(1 for b in hist if b is not None) >= MIN_VOTES
 
             red_confirmed = confirmed(red_hist)
             green_confirmed = confirmed(green_hist)
@@ -468,35 +429,20 @@ def main(camera_id: int = 0, frame_size: int = 240):
             elif green_confirmed:
                 primary_box, primary_color = green_box, 'green'
 
-            # ---- Zone decision logic ----
+            # ---- Decision: ignore until stop height, then freeze C; reverse if too close ----
             decision = 'CLEAR'
             active_box = None
 
             if primary_box is not None:
                 block_height = primary_box['height']
-                if block_height < MIN_SWERVE_HEIGHT:
-                    pass   # too far, ignore
-                elif block_height > REVERSE_HEIGHT:
+                if block_height > REVERSE_HEIGHT_PX:
                     decision = 'REVERSE'
                     active_box = primary_box
                 elif block_height >= STOP_HEIGHT_PX:
                     decision = 'STOP'
                     active_box = primary_box
-                else:
-                    if primary_color == 'red':
-                        if primary_box['center_x'] > LEFT_SIDE_MAX:
-                            decision = 'RED'
-                        else:
-                            decision = 'CLEAR'
-                    else:  # green
-                        if primary_box['center_x'] < RIGHT_SIDE_MIN:
-                            decision = 'GREEN'
-                        else:
-                            decision = 'CLEAR'
-                    if decision != 'CLEAR':
-                        active_box = primary_box
 
-            # Freeze A/B/C once at 45 px; hold until CLEAR. REVERSE still aborts.
+            # Freeze A/B/C once at STOP_HEIGHT_PX; hold until CLEAR. REVERSE still aborts.
             if decision == 'STOP' and waypoint_lock is None and active_box is not None and primary_color:
                 waypoint_lock = compute_waypoint(active_box, primary_color, frame_size)
                 print_waypoint(waypoint_lock)
@@ -506,35 +452,12 @@ def main(camera_id: int = 0, frame_size: int = 240):
                 decision = 'STOP'
                 active_box = active_box or waypoint_lock.get("box")
 
-            # ---- Kalman filter handling ----
-            # Reset only when the tracked COLOR changes (or track is lost),
-            # not when the zone decision (CLEAR vs RED/GREEN/REVERSE) flips —
-            # a block hovering near a zone boundary shouldn't thrash the filter.
-            track_color = primary_color  # 'red', 'green', or None if nothing confirmed
-
-            if track_color != kf_color:
-                kf = create_kalman_filter()
-                kf_initialized = False
-                kf_color = track_color
-
-            smoothed = None
-            if track_color is not None and primary_box is not None:
-                # Always feed the filter the confirmed detection, even when
-                # decision == 'CLEAR' (block confirmed but outside trigger zone/height) —
-                # this keeps velocity estimates warm instead of resetting on every
-                # boundary crossing.
-                smoothed, kf_initialized = kalman_update(kf, primary_box, kf_initialized)
-            elif kf_color is not None and kf_initialized:
-                # Track color still active but this frame had no box (brief occlusion) —
-                # let the filter predict-forward instead of dropping smoothing entirely.
-                smoothed, kf_initialized = kalman_update(kf, None, kf_initialized)
-
             clear_counter = clear_counter + 1 if decision == 'CLEAR' else 0
             if decision == 'CLEAR' and clear_counter >= CLEAR_HISTORY:
                 waypoint_lock = None
 
             # ---- Build serial command string ----
-            if decision in ('RED', 'GREEN', 'REVERSE') and active_box is not None:
+            if decision == 'REVERSE' and active_box is not None:
                 cmd_str = f"{decision},{active_box['center_x']},{active_box['center_y']},{active_box['width']},{active_box['height']}\n"
             elif decision == 'STOP' and waypoint_lock is not None:
                 cmd_str = format_waypoint_line(waypoint_lock)
@@ -565,11 +488,13 @@ def main(camera_id: int = 0, frame_size: int = 240):
             bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
             display = draw_boxes(bgr, display_red, display_green)
 
-            cv2.line(display, (LEFT_SIDE_MAX, 0), (LEFT_SIDE_MAX, frame_size - 1), (0, 165, 255), 1)
-            cv2.putText(display, "RED SAFE <", (2, 10), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 165, 255), 1)
-            cv2.line(display, (RIGHT_SIDE_MIN, 0), (RIGHT_SIDE_MIN, frame_size - 1), (0, 255, 0), 1)
-            cv2.putText(display, "GREEN SAFE >", (RIGHT_SIDE_MIN + 2, 10), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 255, 0), 1)
-            cv2.putText(display, "DANGER", (LEFT_SIDE_MAX + 5, frame_size - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 0, 255), 1)
+            h_now = primary_box['height'] if primary_box else 0
+            cv2.putText(
+                display,
+                f"h={h_now} stop={STOP_HEIGHT_PX} rev={REVERSE_HEIGHT_PX}",
+                (2, 12),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1,
+            )
 
             if waypoint_lock is not None:
                 xc, yc = waypoint_lock["C_cm"]
@@ -584,9 +509,7 @@ def main(camera_id: int = 0, frame_size: int = 240):
             cv2.imshow(window_name, display)
             frame_count += 1
 
-            smoothed_str = (f"SMOOTHED[{kf_color},x={smoothed['center_x']},y={smoothed['center_y']},"
-                             f"vx={smoothed['vx']:.1f},vy={smoothed['vy']:.1f}]" if smoothed is not None else "SMOOTHED:None")
-            print(f"Frame {frame_count} | RED:{red_box} | GREEN:{green_box} | {smoothed_str}", flush=True)
+            print(f"Frame {frame_count} | {decision} | RED:{red_box} | GREEN:{green_box}", flush=True)
 
             key = cv2.waitKey(1) & 0xFF
             if key == ord('q'):
@@ -603,4 +526,4 @@ def main(camera_id: int = 0, frame_size: int = 240):
         cv2.destroyAllWindows()
 
 if __name__ == "__main__":
-    main(camera_id=0, frame_size=240)
+    main()
