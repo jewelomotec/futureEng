@@ -47,17 +47,20 @@ CAPTURE_H = 480
 # Waypoint geometry — measure AB_DISTANCE_CM on the table at STOP_HEIGHT_PX
 # ---------------------------------------------------------------------------
 # When box height hits this, treat current robot pose as B and the block as A.
-STOP_HEIGHT_PX = 45
+# Start at 45 px (closer, tighter arc). If the turn to C is too sharp after a
+# run, drop this to 30 so the bot stops farther away and the arc is gentler.
+STOP_HEIGHT_PX = 45  # try 30 if the arc is too tight
 
 # AC: how far beside the block to pass. Red → +X (robot's right), green → -X.
 AC_OFFSET_CM = 25.0
 
 # AB: forward distance (cm) from robot to block when height is STOP_HEIGHT_PX.
-# Measure this once (tape from camera/axle to the pillar face at 45 px) and set it.
+# Tape this at the SAME height you use above. If you change 45 → 30, measure AB
+# again — do not keep the 45 px distance or C will be computed too close.
 AB_DISTANCE_CM = 40.0
 
 # Real pillar height in cm (WRO traffic-sign / pillar). Used only for lateral (X)
-# similar-triangles. Depth Y uses AB_DISTANCE_CM scaled by 45/height.
+# similar-triangles. Depth Y uses AB_DISTANCE_CM scaled by STOP_HEIGHT_PX/height.
 REAL_BLOCK_HEIGHT_CM = 10.0
 
 # ---------------------------------------------------------------------------
