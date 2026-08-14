@@ -270,21 +270,34 @@ def draw_boxes(frame_bgr: np.ndarray, red_box: dict, green_box: dict) -> np.ndar
 # ---------------------------------------------------------------------------
 # Camera capture
 # ---------------------------------------------------------------------------
+def _is_camera_busy(exc) -> bool:
+    if getattr(exc, "errno", None) == 16:
+        return True
+    text = str(exc).lower()
+    return "busy" in text or "errno 16" in text
+
 def open_camera(camera_id: int):
     extra = {"fflags": "nobuffer", "flags": "low_delay"}
+    device = f"/dev/video{camera_id}"
     try:
         container = av.open(
-            f"/dev/video{camera_id}",
+            device,
             format="v4l2",
             options={"video_size": "640x480", "framerate": "30", "input_format": "mjpeg", **extra},
         )
         stream = container.streams.video[0]
         stream.thread_type = "AUTO"
         return container, stream
-    except Exception:
+    except Exception as first:
+        if _is_camera_busy(first):
+            print(
+                f"Camera busy ({device}). Another program still has it open — "
+                f"stop the old detector (Ctrl+C) or run: pkill -f wro_block_detector"
+            )
+            return None, None
         try:
             container = av.open(
-                f"/dev/video{camera_id}",
+                device,
                 format="v4l2",
                 options={"video_size": "640x480", "framerate": "30", "input_format": "yuyv422", **extra},
             )
@@ -329,7 +342,7 @@ def start_capture_thread(camera_id: int, frame_size=240):
             container, stream = open_camera(camera_id)
             holder["container"] = container
             if container is None:
-                time.sleep(0.5)
+                time.sleep(2.0)
                 continue
             try:
                 for packet in container.demux(stream):
@@ -360,7 +373,7 @@ def start_capture_thread(camera_id: int, frame_size=240):
                 close_container(container)
                 holder["container"] = None
             if not stop_flag.is_set():
-                time.sleep(0.25)
+                time.sleep(0.5)
 
     t = threading.Thread(target=capture_loop, daemon=True)
     t.start()
