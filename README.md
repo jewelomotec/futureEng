@@ -86,7 +86,8 @@ Robot frame at the freeze: **B = (0, 0)**, **+X right**, **+Y forward**.
 | `CONF_THRESHOLD` | 0.55 | ONNX score gate |
 | `MIN_VOTES` / `VOTE_HISTORY` | 5 / 7 | Confirmation |
 | `CLEAR_HISTORY` | 10 | Frames of no-block before `CLEAR` |
-| `CAMERA_ID` | 0 | Force 1 if index 0 is not the webcam |
+| `CAMERA_ID` | 0 | Lenovo picture node. **Do not use 1** (UVC metadata) |
+| `CAMERA_FPS` | 15 | Lower than 30 to avoid Pi 5 USB3 xHCI overruns |
 | `SERIAL_PORTS` | USB0, USB1, AMA0 | First port that opens wins |
 
 If you change 45 → 30, **remeasure `AB_DISTANCE_CM`**. Keeping 40 cm at 30 px makes C too close and the arc stays tight.
@@ -124,9 +125,11 @@ The Pi **does not** send `RED` / `GREEN` any more. The ESP still accepts them if
 | Symptom | What to do |
 |---|---|
 | `[Errno 16] Device or resource busy` | Another `detect.py` still has the camera. `pkill -f detect.py` then `fuser -v /dev/video0` |
-| `No frames received from camera!` | `ls /dev/video*`, set `CAMERA_ID = 1`, only one script running |
-| `avcodec_send_packet` / `av.AVError` | Old PyAV script. Use the current `detect.py` (OpenCV) |
+| `xhci buffer overrun` / UVC probe `-32` / `-71` | USB 3 bandwidth. Plug the Lenovo webcam into a **USB 2** port (not the blue USB 3). Put the ESP (`ttyUSB0`) on a different port. Unplug the cam 5 s. Use this OpenCV `detect.py` at 15 fps — do not open `/dev/video1` (metadata). |
+| `No frames received from camera!` | `pkill -f detect.py`, unplug/replug on USB 2, `v4l2-ctl --list-devices`. Lenovo picture is `/dev/video0`; keep `CAMERA_ID = 0` |
+| `avcodec_send_packet` / `av.AVError` | Old PyAV script. Copy the current `detect.py` (OpenCV) over `~/Documents/Test2_Round2/detect.py` |
 | Always `CLEAR \| RED:None \| GREEN:None` | Nothing in view, or model/conf too strict. Check the preview boxes |
+| `cp210x ttyUSB0: failed set request ... -110` | Same USB stress as the camera. Separate ports; unplug/replug the ESP |
 | Serial never opens | ESP not on USB, or wrong port. Unplug/replug; `ls /dev/ttyUSB*` |
 
 Dataset helpers (not used at race time): `capture.py` (save red/green photos), `prepare.py` (XML → YOLO).

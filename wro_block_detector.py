@@ -34,10 +34,13 @@ CAPTURE_W = 640
 CAPTURE_H = 480
 FRAME_SIZE = 240                # square working frame (not the ONNX input size)
 
-CAMERA_ID = 0                    # try 1 if this prints "no frames"
-CAMERA_INDEXES = (0, 1, 2)       # USB cams on a Pi are often video1, not video0
+CAMERA_ID = 0                    # Lenovo: 0 = picture, 1 = metadata (skip 1 if 0 works)
+CAMERA_INDEXES = (0, 2)          # do not hammer /dev/video1 (UVC metadata)
 CAMERA_EXPOSURE = 200
 CAMERA_WB_TEMP = 4500
+CAMERA_WIDTH = 640
+CAMERA_HEIGHT = 480
+CAMERA_FPS = 15                  # 30 fps on Pi USB3 often overruns xHCI (dmesg buffer overrun)
 SERIAL_PORTS = ("/dev/ttyUSB0", "/dev/ttyUSB1", "/dev/ttyAMA0")
 SERIAL_BAUD = 115200
 
@@ -284,8 +287,9 @@ def open_opencv_camera(index: int):
     if not cap.isOpened():
         return None
     cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
+    cap.set(cv2.CAP_PROP_FPS, CAMERA_FPS)
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     ok, frame = cap.read()
     if not ok or frame is None:
@@ -327,8 +331,8 @@ def start_capture_thread(camera_id: int, frame_size=240):
                     break
             if cap is None:
                 print(
-                    "No camera frames. Is another detect.py still running? "
-                    "Try: pkill -f detect.py   and check: ls /dev/video*"
+                    "No camera frames. Unplug the webcam, plug it into a USB 2 port "
+                    "(not blue USB 3), then: pkill -f detect.py && python detect.py"
                 )
                 time.sleep(2.0)
                 continue
@@ -413,8 +417,9 @@ def main(camera_id: int = CAMERA_ID, frame_size: int = FRAME_SIZE):
 
     if test_frames == 0:
         print("No frames received from camera!")
-        print("Run:  pkill -f detect.py ; ls -l /dev/video*")
-        print("Then try CAMERA_ID = 1 at the top of this file.")
+        print("Run:  pkill -f detect.py ; sudo fuser -k /dev/video0")
+        print("Unplug the Lenovo cam, plug it into a USB 2 port (not blue USB 3).")
+        print("Do not set CAMERA_ID = 1 — that is UVC metadata, not the picture.")
         stop_flag.set()
         t.join(timeout=2.0)
         if cam.get("cap") is not None:
