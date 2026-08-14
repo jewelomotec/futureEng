@@ -36,16 +36,16 @@
 // ==========================================
 //          CONFIGURABLE VARIABLES
 // ==========================================
-int STRAIGHT_SPEED = 150;  // Cruise speed for driving straight (0-255)
-int TURN_SPEED     = 150;  // Kept for tuner/Bluetooth compatibility
-int BACKWARD_SPEED = -150; // Speed used during the reversing arc
+int STRAIGHT_SPEED = 80;  // Cruise speed for driving straight (0-255)
+int TURN_SPEED     = 80;  // Kept for tuner/Bluetooth compatibility
+int BACKWARD_SPEED = -80; // Speed used during the reversing arc
 
 const int RAMP_START_SPEED = 30;
 const int RAMP_STEP = 30;
 const unsigned long RAMP_DURATION_MS = 2000;
 
 
-int SERVO_CENTER   = 120;   // Dead-center steering alignment
+int SERVO_CENTER   = 117;   // Dead-center steering alignment
 int DIFF = 25;
 int SERVO_MAX_LEFT = SERVO_CENTER + DIFF;  // Physical mechanical limit for left turn
 int SERVO_MAX_RIGHT= SERVO_CENTER - DIFF;  // Physical mechanical limit for right turn
@@ -91,9 +91,13 @@ const unsigned long FRONT_CONFIRM_MS = 150; // debounce so one noisy reading doe
 // Tune these for lane width and how square the exit needs to be:
 int ARC_SERVO_ANGLE = 20;              // degrees off center — how sharp the reverse arc is
 float ARC_EXIT_THRESHOLD = 8.0;        // degrees — how precisely it must face the target before exiting
+unsigned long ARC_PAUSE_MS = 500;      // stand still after the 50 cm / 150 ms confirm, before reversing
 unsigned long ARC_MIN_MS = 400;        // prevent an instant exit if heading is already close
 unsigned long ARC_MAX_MS = 4000;       // safety timeout — force-exit the arc even if still off heading
 
+enum TurnPhase { PHASE_PAUSE, PHASE_REVERSE };
+TurnPhase currentTurnPhase = PHASE_PAUSE;
+unsigned long turnPhaseStartTime = 0;
 unsigned long arcStartTime = 0;
 
 
@@ -331,7 +335,9 @@ void checkFrontObstacle() {
     isTurningLeft = turnLeft;
     turnTargetHeading = computeTurnTarget(currentHeading, turnLeft);
 
-    arcStartTime = millis();
+    currentTurnPhase = PHASE_PAUSE;
+    turnPhaseStartTime = millis();
+    arcStartTime = 0;
     currentState = TURNING;
     frontConditionActive = false;
     rampArmedForThisPhase = false;
@@ -406,6 +412,7 @@ void finishArcTurn() {
   finalServoAngle = SERVO_CENTER;
   straightTargetHeading = turnTargetHeading;
   currentState = DRIVING_STRAIGHT;
+  currentTurnPhase = PHASE_PAUSE;
   rampArmedForThisPhase = false;
   turnCooldownUntil = millis() + TURN_COOLDOWN_MS;
   integralError = 0.0;
@@ -413,10 +420,25 @@ void finishArcTurn() {
   lastHeadingTime = millis();
 }
 
-// Reverse with the servo cranked, watching IMU heading vs the target cardinal.
-// Exit when within ARC_EXIT_THRESHOLD after ARC_MIN_MS, or force-exit at ARC_MAX_MS.
+// After the 50 cm / 150 ms confirm: stand still (ARC_PAUSE_MS), then reverse
+// with the servo cranked until heading is on the target cardinal.
 void executeTurnMode(float currentHeading) {
   unsigned long now = millis();
+
+  angleDifference = shortestAngleDiff(currentHeading, turnTargetHeading);
+
+  if (currentTurnPhase == PHASE_PAUSE) {
+    setMotorOutput(0);
+    steeringServo.write(SERVO_CENTER);
+    finalServoAngle = SERVO_CENTER;
+
+    if (now - turnPhaseStartTime >= ARC_PAUSE_MS) {
+      currentTurnPhase = PHASE_REVERSE;
+      arcStartTime = now;
+    }
+    return;
+  }
+
   unsigned long elapsed = now - arcStartTime;
 
   int crankedAngle = reversingArcServoAngle();
@@ -424,7 +446,6 @@ void executeTurnMode(float currentHeading) {
   steeringServo.write(crankedAngle);
   finalServoAngle = crankedAngle;
 
-  angleDifference = shortestAngleDiff(currentHeading, turnTargetHeading);
   float remainingAngle = abs(angleDifference);
 
   bool minTimeReached = elapsed >= ARC_MIN_MS;
@@ -460,7 +481,10 @@ void btPrintln(T msg) {
 
 void printTelemetry(float currentHeading) {
   if (currentState == DRIVING_STRAIGHT) btPrint("MODE: STRAIGHT");
-  else if (currentState == TURNING) btPrint("MODE: ARC     ");
+  else if (currentState == TURNING) {
+    if (currentTurnPhase == PHASE_PAUSE) btPrint("MODE: PAUSE   ");
+    else                                 btPrint("MODE: ARC     ");
+  }
   else if (currentState == OBSTACLE_AVOIDING) btPrint("MODE: AVOID   ");
 
 
@@ -486,7 +510,12 @@ void printTelemetry(float currentHeading) {
     btPrint(" | Target: "); btPrint(turnTargetHeading);
     btPrint("° | Current: "); btPrint(currentHeading);
     btPrint("° | Delta: "); btPrint(abs(angleDifference));
-    btPrint("° | ArcMs: "); btPrint(millis() - arcStartTime);
+    btPrint("°");
+    if (currentTurnPhase == PHASE_PAUSE) {
+      btPrint(" | PauseMs: "); btPrint(millis() - turnPhaseStartTime);
+    } else {
+      btPrint(" | ArcMs: "); btPrint(millis() - arcStartTime);
+    }
   }
 
 
@@ -510,6 +539,7 @@ void loadTunables() {
   FRONT_TURN_DISTANCE   = prefs.getInt("front", FRONT_TURN_DISTANCE);
   ARC_SERVO_ANGLE       = prefs.getInt("arcang", ARC_SERVO_ANGLE);
   ARC_EXIT_THRESHOLD    = prefs.getFloat("arcexit", ARC_EXIT_THRESHOLD);
+  ARC_PAUSE_MS          = prefs.getULong("arcpause", ARC_PAUSE_MS);
   ARC_MIN_MS            = prefs.getULong("arcmin", ARC_MIN_MS);
   ARC_MAX_MS            = prefs.getULong("arcmax", ARC_MAX_MS);
   prefs.end();
@@ -526,6 +556,7 @@ void saveTunables() {
   prefs.putInt("front", FRONT_TURN_DISTANCE);
   prefs.putInt("arcang", ARC_SERVO_ANGLE);
   prefs.putFloat("arcexit", ARC_EXIT_THRESHOLD);
+  prefs.putULong("arcpause", ARC_PAUSE_MS);
   prefs.putULong("arcmin", ARC_MIN_MS);
   prefs.putULong("arcmax", ARC_MAX_MS);
   prefs.end();
@@ -567,6 +598,7 @@ void handleBluetoothCommands() {
           else if (name == "FRONT")    FRONT_TURN_DISTANCE = (int)fVal;
           else if (name == "ARCANGLE") ARC_SERVO_ANGLE = (int)fVal;
           else if (name == "ARCEXIT")  ARC_EXIT_THRESHOLD = fVal;
+          else if (name == "PAUSE")    ARC_PAUSE_MS = (unsigned long)fVal;
           else if (name == "ARCMIN")   ARC_MIN_MS = (unsigned long)fVal;
           else if (name == "ARCMAX")   ARC_MAX_MS = (unsigned long)fVal;
           else recognized = false;
@@ -598,6 +630,7 @@ String buildValuesJson() {
   json += "\"front\":" + String(FRONT_TURN_DISTANCE) + ",";
   json += "\"arcang\":" + String(ARC_SERVO_ANGLE) + ",";
   json += "\"arcexit\":" + String(ARC_EXIT_THRESHOLD, 1) + ",";
+  json += "\"arcpause\":" + String(ARC_PAUSE_MS) + ",";
   json += "\"arcmin\":" + String(ARC_MIN_MS) + ",";
   json += "\"arcmax\":" + String(ARC_MAX_MS) + ",";
   json += "\"maxLeft\":" + String(SERVO_MAX_LEFT) + ",";
@@ -619,6 +652,7 @@ void handleSetValues() {
   if (server.hasArg("front"))    FRONT_TURN_DISTANCE   = server.arg("front").toInt();
   if (server.hasArg("arcang"))   ARC_SERVO_ANGLE       = server.arg("arcang").toInt();
   if (server.hasArg("arcexit"))  ARC_EXIT_THRESHOLD    = server.arg("arcexit").toFloat();
+  if (server.hasArg("arcpause")) ARC_PAUSE_MS          = server.arg("arcpause").toInt();
   if (server.hasArg("arcmin"))   ARC_MIN_MS            = server.arg("arcmin").toInt();
   if (server.hasArg("arcmax"))   ARC_MAX_MS            = server.arg("arcmax").toInt();
 
@@ -655,23 +689,23 @@ const char INDEX_HTML[] PROGMEM = R"HTMLPAGE(
 
   <div class="field">
     <div class="row"><span class="name">SERVO_CENTER</span><span class="val" id="v-center">--</span></div>
-    <input type="range" id="s-center" min="0" max="180" value="90">
+    <input type="range" id="s-center" min="0" max="180" value="117">
   </div>
   <div class="field">
     <div class="row"><span class="name">DIFF</span><span class="val" id="v-diff">--</span></div>
-    <input type="range" id="s-diff" min="5" max="90" value="35">
+    <input type="range" id="s-diff" min="5" max="90" value="25">
   </div>
   <div class="field">
     <div class="row"><span class="name">STRAIGHT_SPEED</span><span class="val" id="v-straight">--</span></div>
-    <input type="range" id="s-straight" min="0" max="255" value="150">
+    <input type="range" id="s-straight" min="0" max="255" value="80">
   </div>
   <div class="field">
     <div class="row"><span class="name">TURN_SPEED</span><span class="val" id="v-turn">--</span></div>
-    <input type="range" id="s-turn" min="0" max="255" value="150">
+    <input type="range" id="s-turn" min="0" max="255" value="80">
   </div>
   <div class="field">
     <div class="row"><span class="name">BACKWARD_SPEED</span><span class="val" id="v-back">--</span></div>
-    <input type="range" id="s-back" min="-255" max="0" value="-150">
+    <input type="range" id="s-back" min="-255" max="0" value="-80">
   </div>
   <div class="field">
     <div class="row"><span class="name">FRONT_TURN_DISTANCE (cm)</span><span class="val" id="v-front">--</span></div>
@@ -686,6 +720,10 @@ const char INDEX_HTML[] PROGMEM = R"HTMLPAGE(
     <input type="range" id="s-arcexit" min="2" max="30" value="8">
   </div>
   <div class="field">
+    <div class="row"><span class="name">ARC_PAUSE_MS</span><span class="val" id="v-arcpause">--</span></div>
+    <input type="range" id="s-arcpause" min="0" max="2000" value="500">
+  </div>
+  <div class="field">
     <div class="row"><span class="name">ARC_MIN_MS</span><span class="val" id="v-arcmin">--</span></div>
     <input type="range" id="s-arcmin" min="0" max="2000" value="400">
   </div>
@@ -697,7 +735,7 @@ const char INDEX_HTML[] PROGMEM = R"HTMLPAGE(
   <div id="status">Loading current values...</div>
 
 <script>
-  const ids = ['center','diff','straight','turn','back','front','arcang','arcexit','arcmin','arcmax'];
+  const ids = ['center','diff','straight','turn','back','front','arcang','arcexit','arcpause','arcmin','arcmax'];
   const sliders = {}; const labels = {};
   ids.forEach(id => {
     sliders[id] = document.getElementById('s-' + id);
@@ -716,6 +754,7 @@ const char INDEX_HTML[] PROGMEM = R"HTMLPAGE(
     labels.front.textContent = sliders.front.value;
     labels.arcang.textContent = sliders.arcang.value;
     labels.arcexit.textContent = parseFloat(sliders.arcexit.value).toFixed(1);
+    labels.arcpause.textContent = sliders.arcpause.value;
     labels.arcmin.textContent = sliders.arcmin.value;
     labels.arcmax.textContent = sliders.arcmax.value;
   }
@@ -730,6 +769,7 @@ const char INDEX_HTML[] PROGMEM = R"HTMLPAGE(
       sliders.front.value = d.front;
       sliders.arcang.value = d.arcang;
       sliders.arcexit.value = d.arcexit;
+      sliders.arcpause.value = d.arcpause;
       sliders.arcmin.value = d.arcmin;
       sliders.arcmax.value = d.arcmax;
       paintLabels();
