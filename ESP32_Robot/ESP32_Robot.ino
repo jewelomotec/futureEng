@@ -76,7 +76,7 @@ const float CARDINAL_HEADINGS[4] = {0.0, 90.0, 180.0, 270.0};
 //      FRONT-DISTANCE TURN TRIGGER
 // ==========================================
 // Start a reversing-arc turn once the front (center) LiDAR stays this close.
-int FRONT_TURN_DISTANCE = 50;              // cm — start the turn maneuver once front gets this close
+int FRONT_TURN_DISTANCE = 10;              // cm — start the wall reverse-arc once front gets this close
 bool frontConditionActive = false;         // true while front has been continuously "close"
 unsigned long frontConditionStartTime = 0; // millis() timestamp when it first became true
 const unsigned long FRONT_CONFIRM_MS = 150; // debounce so one noisy reading doesn't trigger a turn
@@ -92,7 +92,7 @@ const unsigned long FRONT_CONFIRM_MS = 150; // debounce so one noisy reading doe
 // Tune these for lane width and how square the exit needs to be:
 int ARC_SERVO_ANGLE = 20;              // degrees off center — how sharp the reverse arc is
 float ARC_EXIT_THRESHOLD = 8.0;        // degrees — how precisely it must face the target before exiting
-unsigned long ARC_PAUSE_MS = 500;      // stand still after the 50 cm / 150 ms confirm, before reversing
+unsigned long ARC_PAUSE_MS = 500;      // stand still after the 10 cm / 150 ms confirm, before reversing
 unsigned long ARC_MIN_MS = 400;        // prevent an instant exit if heading is already close
 unsigned long ARC_MAX_MS = 4000;       // safety timeout — force-exit the arc even if still off heading
 
@@ -451,7 +451,7 @@ void finishArcTurn() {
   lastHeadingTime = millis();
 }
 
-// After the 50 cm / 150 ms confirm: stand still (ARC_PAUSE_MS), then reverse
+// After the 10 cm / 150 ms confirm: stand still (ARC_PAUSE_MS), then reverse
 // with the servo cranked until heading is on the target cardinal.
 void executeTurnMode(float currentHeading) {
   unsigned long now = millis();
