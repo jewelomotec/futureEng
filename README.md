@@ -22,7 +22,7 @@ LiDARs + IMU  ------------------------------>  ESP32  -->  motor + servo
 
 1. ESP waits for BNO055 gyro calibration (up to 10 s).
 2. Drives straight at PWM **80**, servo center **117**, PID holds heading. Speed ramps 30 → 80 over 2 s.
-3. Front LiDAR **&lt; 10 cm for 150 ms** → pause **500 ms** (wheels centered) → **reverse-arc** with servo offset `ARC_SERVO_ANGLE` (20°).
+3. Front LiDAR **&lt; 15 cm for 150 ms** → pause **500 ms** (wheels centered) → **reverse-arc** with servo offset `ARC_SERVO_ANGLE` (20°).
 4. When heading is within **8°** of the next cardinal (**0 / 90 / 180 / 270**), wheels center and it drives straight on that heading.
 5. **First** corner: turn toward the side with more space (left vs right LiDAR). After that, **always that same direction**.
 6. After **12** turns, if left and right are both under 100 cm and front under 150 cm for 1 s → race stop.
@@ -40,7 +40,7 @@ Bluetooth telemetry: `MODE: STRAIGHT`, then `PAUSE`, then `ARC`.
 5. When the block is gone for **10** frames, Pi sends `CLEAR`.
 6. Height **&gt; 80 px**: Pi sends `REVERSE` → ESP backs up at −80 until `CLEAR` or 5 s.
 
-Front LiDAR wall-turns only run in `DRIVING_STRAIGHT`. At **10 cm** they should not steal a block the camera already stopped for (~45 px is much farther). After `GOTO-C`, if you are still aimed at a wall under 10 cm, a reverse-arc can still start.
+Front LiDAR wall-turns only run in `DRIVING_STRAIGHT`. At **15 cm** they should not steal a block the camera already stopped for (~45 px is much farther). After `GOTO-C`, if you are still aimed at a wall under 15 cm, a reverse-arc can still start.
 
 ---
 
@@ -181,7 +181,7 @@ Race finish (`ROBOT_STOPPED`) is not a Pi command; it is the 12-turn + boxed-in 
 |---|---|---|
 | `STRAIGHT_SPEED` / `BACKWARD_SPEED` | 80 / −80 | Cruise / reverse PWM |
 | `SERVO_CENTER` / `DIFF` | 117 / 25 | Center and max steer |
-| `FRONT_TURN_DISTANCE` | **10 cm** | Wall reverse-arc trigger (held 150 ms) |
+| `FRONT_TURN_DISTANCE` | **15 cm** | Wall reverse-arc trigger (held 150 ms) |
 | `ARC_PAUSE_MS` | 500 | Stand still before wall reverse |
 | `ARC_SERVO_ANGLE` | 20° | How sharp the **wall** reverse is |
 | `ARC_EXIT_THRESHOLD` | 8° | Wall arc done |
@@ -211,7 +211,7 @@ If the pass is too wide, lower `WHEELBASE_CM`. Too tight: raise it, or on the Pi
 ## Tuning order
 
 1. Straight: `SERVO_CENTER` so it does not drift; then PID if needed.
-2. Walls: `FRONT_TURN_DISTANCE` 10 cm, then `ARC_SERVO_ANGLE` / pause / exit.
+2. Walls: `FRONT_TURN_DISTANCE` 15 cm, then `ARC_SERVO_ANGLE` / pause / exit.
 3. Blocks: tape `AB_DISTANCE_CM` at 45 px. Run one pillar. If the arc is sharp, `STOP_HEIGHT_PX = 30` and tape AB again. Then `AC_OFFSET_CM`.
 4. ESP `WHEELBASE_CM` last, only if C is right but the curve is too soft/hard.
 
