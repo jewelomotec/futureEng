@@ -100,6 +100,28 @@ TurnPhase currentTurnPhase = PHASE_PAUSE;
 unsigned long turnPhaseStartTime = 0;
 unsigned long arcStartTime = 0;
 
+// ==========================================
+//     PI WAYPOINT (STOP / WAYPOINT / REVERSE)
+// ==========================================
+// Pi sends STOP then WAYPOINT,color,xa,ya,xc,yc,R,theta,arclen
+float WHEELBASE_CM = 18.0;                 // used to turn radius into a servo angle
+unsigned long WAYPOINT_PAUSE_MS = 400;     // stand still after STOP before driving to C
+float WAYPOINT_EXIT_DEG = 8.0;             // IMU heading error that counts as "arrived"
+unsigned long WAYPOINT_MIN_MS = 250;
+unsigned long WAYPOINT_MAX_MS = 4000;
+float ESTIMATED_FWD_CMS = 30.0;            // rough cm/s at STRAIGHT_SPEED — backup timer
+
+bool waypointReady = false;
+float waypointStartHeading = 0.0;
+float waypointTargetHeading = 0.0;
+float waypointRadiusCm = 0.0;
+float waypointThetaDeg = 0.0;
+float waypointArcLenCm = 0.0;
+int waypointServoAngle = 90;
+unsigned long piHoldStart = 0;
+unsigned long waypointArcStart = 0;
+unsigned long lastPiCmd = 0;
+
 
 // ==========================================
 //        WIFI TUNING CONSOLE SETTINGS
@@ -121,7 +143,15 @@ Servo steeringServo;
 BluetoothSerial SerialBT;
 
 
-enum RobotState { DRIVING_STRAIGHT, TURNING, ROBOT_STOPPED, OBSTACLE_AVOIDING  };
+enum RobotState {
+  DRIVING_STRAIGHT,
+  TURNING,
+  ROBOT_STOPPED,
+  OBSTACLE_AVOIDING,
+  PI_HOLD,
+  WAYPOINT_ARC,
+  PI_REVERSE
+};
 RobotState currentState = DRIVING_STRAIGHT;
 
 
@@ -462,6 +492,218 @@ void executeTurnMode(float currentHeading) {
 }
 
 
+float wrapHeading(float deg) {
+  deg = fmod(deg, 360.0);
+  if (deg < 0.0) deg += 360.0;
+  return deg;
+}
+
+void resumeStraightDriving() {
+  currentState = DRIVING_STRAIGHT;
+  waypointReady = false;
+  rampArmedForThisPhase = false;
+  lastHeadingError = 0.0;
+  lastHeadingTime = millis();
+  integralError = 0.0;
+}
+
+int servoAngleFromRadius(float radiusCm) {
+  int offset = 0;
+  if (!isfinite(radiusCm) || fabs(radiusCm) > 400.0) {
+    offset = 0;
+  } else {
+    float steerDeg = degrees(atan(WHEELBASE_CM / fabs(radiusCm)));
+    offset = (int)round(steerDeg);
+    offset = constrain(offset, 0, DIFF);
+  }
+
+  bool turnRight = isfinite(radiusCm) && radiusCm > 0.0;
+  int angle;
+  if (offset == 0) {
+    angle = SERVO_CENTER;
+  } else if (INVERT_STEERING) {
+    angle = turnRight ? (SERVO_CENTER + offset) : (SERVO_CENTER - offset);
+  } else {
+    angle = turnRight ? (SERVO_CENTER - offset) : (SERVO_CENTER + offset);
+  }
+  return constrain(angle, SERVO_MAX_RIGHT, SERVO_MAX_LEFT);
+}
+
+void handlePiStop() {
+  lastPiCmd = millis();
+  waypointStartHeading = getSmoothedHeading();
+  piHoldStart = millis();
+  waypointReady = false;
+  currentState = PI_HOLD;
+  setMotorOutput(0);
+  steeringServo.write(SERVO_CENTER);
+  finalServoAngle = SERVO_CENTER;
+  Serial.println("PI: STOP — holding");
+  SerialBT.println("PI: STOP — holding");
+}
+
+void handlePiWaypoint(String line) {
+  // WAYPOINT,color,xa,ya,xc,yc,R,theta,arclen
+  lastPiCmd = millis();
+
+  String parts[9];
+  int partCount = 0;
+  int start = 0;
+  while (partCount < 9) {
+    int comma = line.indexOf(',', start);
+    if (comma < 0) {
+      parts[partCount++] = line.substring(start);
+      break;
+    }
+    parts[partCount++] = line.substring(start, comma);
+    start = comma + 1;
+  }
+  if (partCount < 9) {
+    Serial.println("PI: WAYPOINT parse error");
+    return;
+  }
+
+  waypointThetaDeg = parts[7].toFloat();
+  waypointArcLenCm = parts[8].toFloat();
+  String rStr = parts[6];
+  rStr.trim();
+  rStr.toLowerCase();
+  if (rStr == "inf") {
+    waypointRadiusCm = INFINITY;
+  } else {
+    waypointRadiusCm = rStr.toFloat();
+  }
+
+  if (currentState != PI_HOLD) {
+    waypointStartHeading = getSmoothedHeading();
+    piHoldStart = millis();
+    currentState = PI_HOLD;
+    setMotorOutput(0);
+    steeringServo.write(SERVO_CENTER);
+    finalServoAngle = SERVO_CENTER;
+  }
+
+  waypointTargetHeading = wrapHeading(waypointStartHeading + waypointThetaDeg);
+  waypointServoAngle = servoAngleFromRadius(waypointRadiusCm);
+  waypointReady = true;
+
+  Serial.print("PI: WAYPOINT R=");
+  Serial.print(waypointRadiusCm);
+  Serial.print(" theta=");
+  Serial.print(waypointThetaDeg);
+  Serial.print(" servo=");
+  Serial.println(waypointServoAngle);
+}
+
+void handlePiReverse() {
+  lastPiCmd = millis();
+  waypointReady = false;
+  currentState = PI_REVERSE;
+  Serial.println("PI: REVERSE");
+  SerialBT.println("PI: REVERSE");
+}
+
+void handlePiClear() {
+  if (currentState == OBSTACLE_AVOIDING || currentState == PI_HOLD ||
+      currentState == WAYPOINT_ARC || currentState == PI_REVERSE) {
+    if (currentState == WAYPOINT_ARC || currentState == PI_HOLD) {
+      straightTargetHeading = waypointStartHeading;
+    }
+    resumeStraightDriving();
+    Serial.println("PI: CLEAR — returning to path");
+    SerialBT.println("PI: CLEAR — returning to path");
+  }
+}
+
+void handlePiLine(String line) {
+  line.trim();
+  if (line.length() == 0) return;
+
+  int comma = line.indexOf(',');
+  String name = (comma < 0) ? line : line.substring(0, comma);
+  name.trim();
+  name.toUpperCase();
+
+  if (name == "STOP") {
+    handlePiStop();
+  } else if (name == "WAYPOINT") {
+    handlePiWaypoint(line);
+  } else if (name == "REVERSE") {
+    handlePiReverse();
+  } else if (name == "CLEAR") {
+    handlePiClear();
+  } else if (name == "RED") {
+    avoidDirectionRight = true;
+    currentState = OBSTACLE_AVOIDING;
+    lastObstacleCmd = millis();
+    lastPiCmd = millis();
+    Serial.println("OBSTACLE: RED - Swerving RIGHT");
+  } else if (name == "GREEN") {
+    avoidDirectionRight = false;
+    currentState = OBSTACLE_AVOIDING;
+    lastObstacleCmd = millis();
+    lastPiCmd = millis();
+    Serial.println("OBSTACLE: GREEN - Swerving LEFT");
+  }
+}
+
+void executePiHold() {
+  setMotorOutput(0);
+  steeringServo.write(SERVO_CENTER);
+  finalServoAngle = SERVO_CENTER;
+
+  if (waypointReady && (millis() - piHoldStart >= WAYPOINT_PAUSE_MS)) {
+    currentState = WAYPOINT_ARC;
+    waypointArcStart = millis();
+    rampArmedForThisPhase = false;
+    Serial.println("PI: driving arc to C");
+  } else if (!waypointReady && (millis() - piHoldStart > OBSTACLE_TIMEOUT_MS)) {
+    straightTargetHeading = waypointStartHeading;
+    resumeStraightDriving();
+    Serial.println("PI: STOP timeout — no WAYPOINT, resuming");
+  }
+}
+
+void executeWaypointArc(float currentHeading) {
+  setMotorOutput(STRAIGHT_SPEED);
+  steeringServo.write(waypointServoAngle);
+  finalServoAngle = waypointServoAngle;
+
+  angleDifference = shortestAngleDiff(currentHeading, waypointTargetHeading);
+  unsigned long elapsed = millis() - waypointArcStart;
+
+  bool headingClose = abs(angleDifference) <= WAYPOINT_EXIT_DEG;
+  bool minTime = elapsed >= WAYPOINT_MIN_MS;
+  bool maxTime = elapsed >= WAYPOINT_MAX_MS;
+
+  unsigned long expectedMs = 1000;
+  if (ESTIMATED_FWD_CMS > 1.0 && waypointArcLenCm > 0.0) {
+    expectedMs = (unsigned long)(1000.0 * waypointArcLenCm / ESTIMATED_FWD_CMS);
+    if (expectedMs < WAYPOINT_MIN_MS) expectedMs = WAYPOINT_MIN_MS;
+    if (expectedMs > WAYPOINT_MAX_MS) expectedMs = WAYPOINT_MAX_MS;
+  }
+  bool distanceGuess = elapsed >= expectedMs && headingClose;
+
+  if ((minTime && headingClose) || distanceGuess || maxTime) {
+    steeringServo.write(SERVO_CENTER);
+    finalServoAngle = SERVO_CENTER;
+    straightTargetHeading = waypointStartHeading;
+    resumeStraightDriving();
+    Serial.println("PI: arrived at C — resuming original heading");
+  }
+}
+
+void executePiReverse() {
+  setMotorOutput(BACKWARD_SPEED);
+  steeringServo.write(SERVO_CENTER);
+  finalServoAngle = SERVO_CENTER;
+  if (millis() - lastPiCmd > OBSTACLE_TIMEOUT_MS) {
+    resumeStraightDriving();
+    Serial.println("PI: REVERSE timeout — resuming");
+  }
+}
+
+
 // ==========================================
 //      BLUETOOTH DUAL-PRINT HELPERS
 // ==========================================
@@ -486,6 +728,9 @@ void printTelemetry(float currentHeading) {
     else                                 btPrint("MODE: ARC     ");
   }
   else if (currentState == OBSTACLE_AVOIDING) btPrint("MODE: AVOID   ");
+  else if (currentState == PI_HOLD)           btPrint("MODE: PI-HOLD ");
+  else if (currentState == WAYPOINT_ARC)      btPrint("MODE: GOTO-C  ");
+  else if (currentState == PI_REVERSE)        btPrint("MODE: REVERSE ");
 
 
   btPrint(" | L: "); btPrint(currentLeftDist); btPrint("cm");
@@ -516,6 +761,11 @@ void printTelemetry(float currentHeading) {
     } else {
       btPrint(" | ArcMs: "); btPrint(millis() - arcStartTime);
     }
+  } else if (currentState == WAYPOINT_ARC) {
+    btPrint(" | Target: "); btPrint(waypointTargetHeading);
+    btPrint("° | Current: "); btPrint(currentHeading);
+    btPrint("° | Delta: "); btPrint(abs(angleDifference));
+    btPrint("°");
   }
 
 
@@ -907,51 +1157,25 @@ void avoidObstacle() {
 // ==========================================
 void loop() {
   server.handleClient(); // always service the tuning page, in every state
-  // ---- Serial command parser for obstacle avoidance ----
-    static String serialBuffer = "";
-    while (Serial.available()) {
+  // ---- Serial command parser (Pi: STOP / WAYPOINT / REVERSE / CLEAR, plus RED/GREEN) ----
+  static String serialBuffer = "";
+  while (Serial.available()) {
     char c = Serial.read();
-    if (c == '\n') {
-        serialBuffer.trim();
-        if (serialBuffer == "RED") {
-        if (currentState != OBSTACLE_AVOIDING) {
-            avoidDirectionRight = true;
-            currentState = OBSTACLE_AVOIDING;
-            Serial.println("OBSTACLE: RED - Swerving RIGHT");
-        }
-        lastObstacleCmd = millis();
-        }
-        else if (serialBuffer == "GREEN") {
-        if (currentState != OBSTACLE_AVOIDING) {
-            avoidDirectionRight = false;
-            currentState = OBSTACLE_AVOIDING;
-            Serial.println("OBSTACLE: GREEN - Swerving LEFT");
-        }
-        lastObstacleCmd = millis();
-        }
-        else if (serialBuffer == "CLEAR") {
-        if (currentState == OBSTACLE_AVOIDING) {
-            currentState = DRIVING_STRAIGHT;
-            lastHeadingError = 0.0;
-            lastHeadingTime = millis();
-            integralError = 0.0;
-            Serial.println("OBSTACLE: CLEARED - Returning to path");
-        }
-        }
+    if (c == '\n' || c == '\r') {
+      if (serialBuffer.length() > 0) {
+        handlePiLine(serialBuffer);
         serialBuffer = "";
+      }
     } else {
-        serialBuffer += c;
+      serialBuffer += c;
     }
-    }
+  }
 
-    // ---- Obstacle avoidance safety timeout (5s) ----
-    if (currentState == OBSTACLE_AVOIDING && (millis() - lastObstacleCmd > OBSTACLE_TIMEOUT_MS)) {
-    currentState = DRIVING_STRAIGHT;
-    lastHeadingError = 0.0;
-    lastHeadingTime = millis();
-    integralError = 0.0;
+  // ---- Pi / obstacle safety timeout ----
+  if (currentState == OBSTACLE_AVOIDING && (millis() - lastObstacleCmd > OBSTACLE_TIMEOUT_MS)) {
+    resumeStraightDriving();
     Serial.println("OBSTACLE: Timeout - Auto returning to path");
-    }
+  }
   handleBluetoothCommands();
 
   if (currentState == ROBOT_STOPPED) {
@@ -1010,6 +1234,15 @@ void loop() {
   }
   else if (currentState == OBSTACLE_AVOIDING) {
     avoidObstacle();
+  }
+  else if (currentState == PI_HOLD) {
+    executePiHold();
+  }
+  else if (currentState == WAYPOINT_ARC) {
+    executeWaypointArc(currentHeading);
+  }
+  else if (currentState == PI_REVERSE) {
+    executePiReverse();
   }
 
 
