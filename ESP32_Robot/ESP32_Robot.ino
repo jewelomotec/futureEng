@@ -1,4 +1,5 @@
 #include <Wire.h>
+#include <math.h>
 #include <Adafruit_Sensor.h>
 #include "BluetoothSerial.h"
 #include <Adafruit_BNO055.h>
