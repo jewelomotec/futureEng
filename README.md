@@ -128,6 +128,9 @@ The Pi **does not** send `RED` / `GREEN` any more. The ESP still accepts them if
 | `xhci buffer overrun` / UVC probe `-32` / `-71` | USB 3 bandwidth. Plug the Lenovo webcam into a **USB 2** port (not the blue USB 3). Put the ESP (`ttyUSB0`) on a different port. Unplug the cam 5 s. Use this OpenCV `detect.py` at 15 fps — do not open `/dev/video1` (metadata). |
 | `No frames received from camera!` | `pkill -f detect.py`, unplug/replug on USB 2, `v4l2-ctl --list-devices`. Lenovo picture is `/dev/video0`; keep `CAMERA_ID = 0` |
 | `avcodec_send_packet` / `av.AVError` | Old PyAV script. Copy the current `detect.py` (OpenCV) over `~/Documents/Test2_Round2/detect.py` |
+| Overlay `h=` never hits 45 | Height is on the **240×240** working frame, not the 3× preview window. A box that looks ~135 px tall on screen is only ~45 px to the script |
+| Overlay says `STOP` but the car does not | Need `Serial port opened` and `>>> Sent STOP` then `>>> Sent WAYPOINT`. If you see `NO-SERIAL` / `Serial is NOT open`, the ESP never gets the command |
+| `>>> Sent STOP` but Bluetooth never shows `PI-HOLD` / `GOTO-C` | Re-flash this `.ino`. Duplicate STOP/CLEAR no longer abort the arc |
 | Always `CLEAR \| RED:None \| GREEN:None` | Nothing in view, or model/conf too strict. Check the preview boxes |
 | `cp210x ttyUSB0: failed set request ... -110` | Same USB stress as the camera. Separate ports; unplug/replug the ESP |
 | Serial never opens | ESP not on USB, or wrong port. Unplug/replug; `ls /dev/ttyUSB*` |
@@ -198,6 +201,8 @@ Bluetooth examples: `FRONT=10`, `CENTER=117`, `STRAIGHT=80`, `ARCANGLE=20`.
 3. Servo from `atan(WHEELBASE_CM / |R|)`, clamped to `DIFF`, inverted if `INVERT_STEERING`.
 4. Drive forward at 80 until heading is close, or `WAYPOINT_MAX_MS` (4 s).
 5. Center wheels; `straightTargetHeading` = heading from before the stop.
+
+The Pi re-sends `WAYPOINT` while the block stays locked (USB often drops a one-shot). Extra `STOP` / `WAYPOINT` during `PI_HOLD` / `GOTO-C` are ignored. `CLEAR` does not abort an arc already in progress.
 
 If the pass is too wide, lower `WHEELBASE_CM`. Too tight: raise it, or on the Pi use 30 px + new `AB_DISTANCE_CM`.
 

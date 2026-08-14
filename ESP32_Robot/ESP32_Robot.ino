@@ -532,6 +532,11 @@ int servoAngleFromRadius(float radiusCm) {
 
 void handlePiStop() {
   lastPiCmd = millis();
+  // Duplicate STOP while already holding / arcing — do not clear waypointReady
+  // or restart the 400 ms pause (Pi retransmits because USB drops packets).
+  if (currentState == PI_HOLD || currentState == WAYPOINT_ARC) {
+    return;
+  }
   waypointStartHeading = getSmoothedHeading();
   piHoldStart = millis();
   waypointReady = false;
@@ -561,6 +566,11 @@ void handlePiWaypoint(String line) {
   }
   if (partCount < 9) {
     Serial.println("PI: WAYPOINT parse error");
+    return;
+  }
+
+  if (currentState == WAYPOINT_ARC) {
+    // Already driving to C — ignore USB retransmits.
     return;
   }
 
@@ -605,9 +615,13 @@ void handlePiReverse() {
 }
 
 void handlePiClear() {
+  if (currentState == WAYPOINT_ARC) {
+    // Detection flicker used to send CLEAR and abort the arc mid-turn.
+    return;
+  }
   if (currentState == OBSTACLE_AVOIDING || currentState == PI_HOLD ||
-      currentState == WAYPOINT_ARC || currentState == PI_REVERSE) {
-    if (currentState == WAYPOINT_ARC || currentState == PI_HOLD) {
+      currentState == PI_REVERSE) {
+    if (currentState == PI_HOLD) {
       straightTargetHeading = waypointStartHeading;
     }
     resumeStraightDriving();

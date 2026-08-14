@@ -49,8 +49,9 @@ VOTE_HISTORY = 7
 MIN_VOTES = 5
 CLEAR_HISTORY = 10              # consecutive CLEAR frames before we drop a waypoint
 
-# Too close — abort / reverse (ESP does not handle REVERSE yet).
+# Too close — abort / reverse.
 REVERSE_HEIGHT_PX = 80
+WAYPOINT_RESEND_S = 0.4         # re-send WAYPOINT while locked (USB often drops a one-shot)
 
 # ---------------------------------------------------------------------------
 # Waypoint geometry — measure AB_DISTANCE_CM on the table at STOP_HEIGHT_PX
@@ -436,6 +437,23 @@ def main(camera_id: int = CAMERA_ID, frame_size: int = FRAME_SIZE):
     frame_count = 0
     clear_counter = 0
     waypoint_lock = None   # frozen A/B/C until the block is gone (CLEAR)
+    last_wp_send_time = 0.0
+    sent_stop_for_lock = False
+
+    def latest_box(hist):
+        for b in reversed(hist):
+            if b is not None:
+                return b
+        return None
+
+    def hist_max_height(hist):
+        hs = [b["height"] for b in hist if b is not None]
+        return max(hs) if hs else 0
+
+    def serial_write(line: str) -> None:
+        ser.write(line.encode("ascii"))
+        ser.flush()
+        print(f">>> Sent {line.strip()}", flush=True)
 
     try:
         while True:
@@ -452,73 +470,93 @@ def main(camera_id: int = CAMERA_ID, frame_size: int = FRAME_SIZE):
 
             red_confirmed = confirmed(red_hist)
             green_confirmed = confirmed(green_hist)
+            red_stable = latest_box(red_hist) if red_confirmed else None
+            green_stable = latest_box(green_hist) if green_confirmed else None
 
             primary_box = None
             primary_color = None
             if red_confirmed and green_confirmed:
-                if red_box is not None and green_box is not None:
-                    primary_box, primary_color = (red_box, 'red') if red_box['height'] >= green_box['height'] else (green_box, 'green')
-                elif red_box is not None:
-                    primary_box, primary_color = red_box, 'red'
-                elif green_box is not None:
-                    primary_box, primary_color = green_box, 'green'
+                if red_stable is not None and green_stable is not None:
+                    primary_box, primary_color = (
+                        (red_stable, "red") if red_stable["height"] >= green_stable["height"]
+                        else (green_stable, "green")
+                    )
+                elif red_stable is not None:
+                    primary_box, primary_color = red_stable, "red"
+                elif green_stable is not None:
+                    primary_box, primary_color = green_stable, "green"
             elif red_confirmed:
-                primary_box, primary_color = red_box, 'red'
+                primary_box, primary_color = red_stable, "red"
             elif green_confirmed:
-                primary_box, primary_color = green_box, 'green'
+                primary_box, primary_color = green_stable, "green"
 
             # ---- Decision: ignore until stop height, then freeze C; reverse if too close ----
-            decision = 'CLEAR'
+            decision = "CLEAR"
             active_box = None
 
             if primary_box is not None:
-                block_height = primary_box['height']
+                color_hist = red_hist if primary_color == "red" else green_hist
+                block_height = max(primary_box["height"], hist_max_height(color_hist))
                 if block_height > REVERSE_HEIGHT_PX:
-                    decision = 'REVERSE'
+                    decision = "REVERSE"
                     active_box = primary_box
                 elif block_height >= STOP_HEIGHT_PX:
-                    decision = 'STOP'
+                    decision = "STOP"
                     active_box = primary_box
 
-            # Freeze A/B/C once at STOP_HEIGHT_PX; hold until CLEAR. REVERSE still aborts.
-            if decision == 'STOP' and waypoint_lock is None and active_box is not None and primary_color:
+            # Freeze A/B/C once at STOP_HEIGHT_PX. Stay locked even if height
+            # dips under 45 for a few frames (that used to send CLEAR and abort the ESP).
+            if decision == "STOP" and waypoint_lock is None and active_box is not None and primary_color:
                 waypoint_lock = compute_waypoint(active_box, primary_color, frame_size)
                 print_waypoint(waypoint_lock)
-            elif decision == 'REVERSE':
+                sent_stop_for_lock = False
+                last_wp_send_time = 0.0
+            elif decision == "REVERSE":
                 waypoint_lock = None
-            elif waypoint_lock is not None and decision != 'CLEAR':
-                decision = 'STOP'
+                sent_stop_for_lock = False
+            elif waypoint_lock is not None and (red_confirmed or green_confirmed):
+                decision = "STOP"
                 active_box = active_box or waypoint_lock.get("box")
 
-            clear_counter = clear_counter + 1 if decision == 'CLEAR' else 0
-            if decision == 'CLEAR' and clear_counter >= CLEAR_HISTORY:
+            clear_counter = clear_counter + 1 if decision == "CLEAR" else 0
+            if decision == "CLEAR" and clear_counter >= CLEAR_HISTORY:
                 waypoint_lock = None
+                sent_stop_for_lock = False
 
-            # ---- Build serial command string ----
-            if decision == 'REVERSE' and active_box is not None:
-                cmd_str = f"{decision},{active_box['center_x']},{active_box['center_y']},{active_box['width']},{active_box['height']}\n"
-            elif decision == 'STOP' and waypoint_lock is not None:
-                cmd_str = format_waypoint_line(waypoint_lock)
-            else:
-                cmd_str = "CLEAR\n"
+            now = time.time()
+            if ser is None and frame_count % 30 == 0:
+                print("Serial is NOT open — ESP will never STOP/WAYPOINT. Check /dev/ttyUSB*", flush=True)
 
-            # ---- Send over serial if command changed ----
-            if cmd_str != last_sent and ser is not None:
-                if not (decision == 'CLEAR' and clear_counter < CLEAR_HISTORY):  # debounce CLEAR
-                    try:
-                        if decision == 'STOP' and waypoint_lock is not None:
+            try:
+                if ser is not None and decision == "REVERSE" and active_box is not None:
+                    cmd_str = (
+                        f"REVERSE,{active_box['center_x']},{active_box['center_y']},"
+                        f"{active_box['width']},{active_box['height']}\n"
+                    )
+                    if cmd_str != last_sent:
+                        serial_write(cmd_str)
+                        last_sent = cmd_str
+                elif ser is not None and decision == "STOP" and waypoint_lock is not None:
+                    due = (now - last_wp_send_time) >= WAYPOINT_RESEND_S
+                    if (not sent_stop_for_lock) or due:
+                        if not sent_stop_for_lock:
                             stop_box = waypoint_lock["box"]
-                            stop_line = (
+                            serial_write(
                                 f"STOP,{stop_box['center_x']},{stop_box['center_y']},"
                                 f"{stop_box['width']},{stop_box['height']}\n"
                             )
-                            ser.write(stop_line.encode())
-                            print(f">>> Sent {stop_line.strip()}")
-                        ser.write(cmd_str.encode())
-                        print(f">>> Sent {cmd_str.strip()}")
-                        last_sent = cmd_str
-                    except Exception as e:
-                        print(f"Serial write failed: {e}")
+                            time.sleep(0.03)
+                            sent_stop_for_lock = True
+                        wp_line = format_waypoint_line(waypoint_lock)
+                        serial_write(wp_line)
+                        last_sent = wp_line
+                        last_wp_send_time = now
+                elif ser is not None and decision == "CLEAR" and clear_counter >= CLEAR_HISTORY:
+                    if last_sent != "CLEAR\n":
+                        serial_write("CLEAR\n")
+                        last_sent = "CLEAR\n"
+            except Exception as e:
+                print(f"Serial write failed: {e}", flush=True)
 
             # Display drawing (unchanged)
             display_red = red_box if red_confirmed else None
@@ -526,12 +564,13 @@ def main(camera_id: int = CAMERA_ID, frame_size: int = FRAME_SIZE):
             bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
             display = draw_boxes(bgr, display_red, display_green)
 
-            h_now = primary_box['height'] if primary_box else 0
+            h_now = primary_box["height"] if primary_box else 0
+            ser_txt = ser.port if ser is not None else "NO-SERIAL"
             cv2.putText(
                 display,
-                f"h={h_now} stop={STOP_HEIGHT_PX} rev={REVERSE_HEIGHT_PX}",
+                f"{decision} h={h_now} stop={STOP_HEIGHT_PX} {ser_txt}",
                 (2, 12),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1,
+                cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 255, 255) if decision == "STOP" else (255, 255, 255), 1,
             )
 
             if waypoint_lock is not None:
