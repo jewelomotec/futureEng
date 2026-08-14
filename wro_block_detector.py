@@ -6,7 +6,8 @@ Serial output: commands + CSV coordinates (center_x,center_y,width,height).
 Waypoint (this file): when a confirmed block reaches STOP_HEIGHT_PX, freeze
 the robot pose as B, the block as A, and compute pass point C (AC_OFFSET_CM
 laterally). Prints A/B/C and the constant-curvature arc B→C. Sends STOP then
-WAYPOINT over serial. ESP firmware does not consume STOP/WAYPOINT yet.
+WAYPOINT over serial. The ESP sketch in ESP32_Robot/ESP32_Robot.ino consumes those
+lines (hold, then forward arc to C).
 """
 
 import math
