@@ -200,7 +200,10 @@ Race finish (`ROBOT_STOPPED`) is not a Pi command; it is the 12-turn + boxed-in 
 | `WAYPOINT_PAUSE_MS` | **400** | Sit after Pi `STOP` before GOTO-C |
 | `WAYPOINT_LIDAR_IGNORE_MS` | **2500** | Do not start a wall reverse-arc during/after GOTO-C |
 | `SIDE_AVOID_CM` | **12** | During GOTO-C, if L or R closer than this, steer away from that wall |
-| `SIDE_AVOID_SERVO` | **28°** | How hard to steer away when a side LiDAR trips |
+| `AFTER_C_PAUSE_MS` | **500** | Sit after arriving at C, then recenter |
+| `RECENTER_BALANCE_CM` | **10** | |L−R| that counts as lane middle |
+| `RECENTER_SERVO` | **22°** | Steer toward the side with more space |
+| `RECENTER_MAX_MS` | **1800** | Stop recentering and hold heading |
 | `WAYPOINT_EXIT_DEG` | 8° | Arrived at C |
 | `WHEELBASE_CM` | **18.0** | Maps Pi **R** → servo (round1_2026 value) |
 | `MAX_TURNS` | 12 | Then allow race stop |

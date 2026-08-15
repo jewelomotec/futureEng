@@ -125,6 +125,11 @@ unsigned long WAYPOINT_MAX_MS = 4000;
 float ESTIMATED_FWD_CMS = 30.0;            // rough cm/s at STRAIGHT_SPEED — backup timer
 int SIDE_AVOID_CM = 12;                    // during GOTO-C, steer away if L or R closer than this
 int SIDE_AVOID_SERVO = 28;                 // extra steer away from that wall (degrees off centre)
+unsigned long AFTER_C_PAUSE_MS = 500;      // sit after arriving at C, then recenter
+unsigned long RECENTER_MAX_MS = 1800;      // give up centering after this
+int RECENTER_BALANCE_CM = 10;              // |L-R| below this = middle of the lane
+int RECENTER_SERVO = 22;                   // steer toward the side with more space
+unsigned long afterCPhaseStart = 0;
 
 bool waypointReady = false;
 float waypointStartHeading = 0.0;
@@ -164,7 +169,9 @@ enum RobotState {
   OBSTACLE_AVOIDING,
   PI_HOLD,
   WAYPOINT_ARC,
-  PI_REVERSE
+  PI_REVERSE,
+  PI_AFTER_C_PAUSE,
+  PI_RECENTER
 };
 RobotState currentState = DRIVING_STRAIGHT;
 
@@ -568,8 +575,47 @@ int sideAvoidGotoCServo(int waypointAngle) {
   return constrain(angle, SERVO_MAX_RIGHT, SERVO_MAX_LEFT);
 }
 
+int steerTowardLaneMiddle() {
+  int offset = constrain(RECENTER_SERVO, 0, DIFF);
+  if (currentLeftDist <= 0 || currentRightDist <= 0) {
+    return SERVO_CENTER;
+  }
+  int gap = currentLeftDist - currentRightDist;
+  if (abs(gap) <= RECENTER_BALANCE_CM) {
+    return SERVO_CENTER;
+  }
+  bool steerRight = (gap < 0); // left smaller = closer to left wall → go right
+  int angle;
+  if (INVERT_STEERING) {
+    angle = steerRight ? (SERVO_CENTER + offset) : (SERVO_CENTER - offset);
+  } else {
+    angle = steerRight ? (SERVO_CENTER - offset) : (SERVO_CENTER + offset);
+  }
+  return constrain(angle, SERVO_MAX_RIGHT, SERVO_MAX_LEFT);
+}
+
+bool laneIsCentered() {
+  if (currentLeftDist <= 0 || currentRightDist <= 0) return false;
+  return abs(currentLeftDist - currentRightDist) <= RECENTER_BALANCE_CM;
+}
+
+bool inPostCManeuver() {
+  return currentState == PI_AFTER_C_PAUSE || currentState == PI_RECENTER;
+}
+
+void beginAfterCPause() {
+  straightTargetHeading = waypointStartHeading;
+  afterCPhaseStart = millis();
+  currentState = PI_AFTER_C_PAUSE;
+  ignoreFrontLidarFor(AFTER_C_PAUSE_MS + RECENTER_MAX_MS + WAYPOINT_LIDAR_IGNORE_MS);
+  Serial.println("PI: arrived at C — pause then recenter to lane middle");
+}
+
 void handlePiStop() {
   lastPiCmd = millis();
+  if (currentState == WAYPOINT_ARC || inPostCManeuver()) {
+    return;
+  }
   ignoreFrontLidarFor(WAYPOINT_LIDAR_IGNORE_MS);
   waypointStartHeading = getSmoothedHeading();
   piHoldStart = millis();
@@ -584,6 +630,9 @@ void handlePiStop() {
 void handlePiWaypoint(String line) {
   // WAYPOINT,color,xa,ya,xc,yc,R,theta,arclen
   lastPiCmd = millis();
+  if (currentState == WAYPOINT_ARC || inPostCManeuver()) {
+    return;
+  }
   ignoreFrontLidarFor(WAYPOINT_LIDAR_IGNORE_MS);
 
   String parts[9];
@@ -644,9 +693,12 @@ void handlePiReverse() {
 }
 
 void handlePiClear() {
+  if (currentState == WAYPOINT_ARC || inPostCManeuver()) {
+    return;
+  }
   if (currentState == OBSTACLE_AVOIDING || currentState == PI_HOLD ||
-      currentState == WAYPOINT_ARC || currentState == PI_REVERSE) {
-    if (currentState == WAYPOINT_ARC || currentState == PI_HOLD) {
+      currentState == PI_REVERSE) {
+    if (currentState == PI_HOLD) {
       straightTargetHeading = waypointStartHeading;
     }
     ignoreFrontLidarFor(WAYPOINT_LIDAR_IGNORE_MS);
@@ -730,10 +782,32 @@ void executeWaypointArc(float currentHeading) {
   if ((minTime && headingClose) || distanceGuess || maxTime) {
     steeringServo.write(SERVO_CENTER);
     finalServoAngle = SERVO_CENTER;
-    straightTargetHeading = waypointStartHeading;
-    ignoreFrontLidarFor(WAYPOINT_LIDAR_IGNORE_MS);
+    beginAfterCPause();
+  }
+}
+
+void executeAfterCPause() {
+  setMotorOutput(0);
+  steeringServo.write(SERVO_CENTER);
+  finalServoAngle = SERVO_CENTER;
+  if (millis() - afterCPhaseStart >= AFTER_C_PAUSE_MS) {
+    afterCPhaseStart = millis();
+    currentState = PI_RECENTER;
+    rampArmedForThisPhase = false;
+    Serial.println("PI: recentering to lane middle");
+  }
+}
+
+void executePiRecenter() {
+  setMotorOutput(STRAIGHT_SPEED);
+  int steer = steerTowardLaneMiddle();
+  steeringServo.write(steer);
+  finalServoAngle = steer;
+
+  bool timedOut = (millis() - afterCPhaseStart) >= RECENTER_MAX_MS;
+  if (laneIsCentered() || timedOut) {
     resumeStraightDriving();
-    Serial.println("PI: arrived at C — resuming original heading");
+    Serial.println(timedOut ? "PI: recenter timeout — holding heading" : "PI: lane middle — holding heading");
   }
 }
 
@@ -772,6 +846,8 @@ void printTelemetry(float currentHeading) {
   else if (currentState == OBSTACLE_AVOIDING) btPrint("MODE: AVOID   ");
   else if (currentState == PI_HOLD)           btPrint("MODE: PI-HOLD ");
   else if (currentState == WAYPOINT_ARC)      btPrint("MODE: GOTO-C  ");
+  else if (currentState == PI_AFTER_C_PAUSE)  btPrint("MODE: C-PAUSE ");
+  else if (currentState == PI_RECENTER)       btPrint("MODE: MIDPATH ");
   else if (currentState == PI_REVERSE)        btPrint("MODE: REVERSE ");
 
 
@@ -808,6 +884,9 @@ void printTelemetry(float currentHeading) {
     btPrint("° | Current: "); btPrint(currentHeading);
     btPrint("° | Delta: "); btPrint(abs(angleDifference));
     btPrint("°");
+  } else if (currentState == PI_RECENTER) {
+    btPrint(" | L-R: "); btPrint(currentLeftDist - currentRightDist);
+    btPrint("cm | Ms: "); btPrint(millis() - afterCPhaseStart);
   }
 
 
@@ -1215,6 +1294,12 @@ void loop() {
   }
   else if (currentState == WAYPOINT_ARC) {
     executeWaypointArc(currentHeading);
+  }
+  else if (currentState == PI_AFTER_C_PAUSE) {
+    executeAfterCPause();
+  }
+  else if (currentState == PI_RECENTER) {
+    executePiRecenter();
   }
   else if (currentState == PI_REVERSE) {
     executePiReverse();
