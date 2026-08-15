@@ -78,7 +78,7 @@ Robot frame at the freeze: **B = (0, 0)**, **+X right**, **+Y forward**.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `STOP_HEIGHT_PX` | 45 | Stop / freeze A,B,C. **30** = farther = gentler arc |
+| `STOP_HEIGHT_PX` | 30 | Freeze A,B,C and send WAYPOINT |
 | `AB_DISTANCE_CM` | 40 | Tape **forward** distance to the pillar **at that same pixel height** |
 | `AC_OFFSET_CM` | 25 | How far beside the block to pass |
 | `REAL_BLOCK_HEIGHT_CM` | 10 | Real pillar height (cm), for left/right position |
@@ -186,7 +186,7 @@ Race finish (`ROBOT_STOPPED`) is not a Pi command; it is the 12-turn + boxed-in 
 | `ARC_SERVO_ANGLE` | 20° | How sharp the **wall** reverse is |
 | `ARC_EXIT_THRESHOLD` | 8° | Wall arc done |
 | `ARC_MIN_MS` / `ARC_MAX_MS` | 400 / 4000 | Wall arc timing |
-| `WAYPOINT_PAUSE_MS` | 400 | Stand still after Pi `STOP` |
+| `WAYPOINT_PAUSE_MS` | 0 | No stand-still after Pi `STOP`; arc starts immediately |
 | `WAYPOINT_EXIT_DEG` | 8° | Arrived at C |
 | `WHEELBASE_CM` | 18 | Maps Pi **R** → servo. Lower = more steer for the same R |
 | `MAX_TURNS` | 12 | Then allow race stop |

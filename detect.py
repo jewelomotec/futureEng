@@ -59,7 +59,7 @@ WAYPOINT_RESEND_S = 0.4         # re-send WAYPOINT while locked (USB often drops
 # When box height hits this, treat current robot pose as B and the block as A.
 # Start at 45 px (closer, tighter arc). If the turn to C is too sharp after a
 # run, drop this to 30 so the bot stops farther away and the arc is gentler.
-STOP_HEIGHT_PX = 45  # try 30 if the arc is too tight
+STOP_HEIGHT_PX = 30  # freeze A/B/C and send WAYPOINT at this box height
 
 # AC: how far beside the block to pass. Red → +X (robot's right), green → -X.
 AC_OFFSET_CM = 25.0
