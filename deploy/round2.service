@@ -1,3 +1,7 @@
+# Official name: Round 2 service
+# systemd unit name on the Pi: round2
+# Starts the Pi race copy: round2.py (paste from detect.py)
+# Catalog: docs/CODE_CATALOG.md
 [Unit]
 Description=WRO Round 2 block detector
 After=network.target
