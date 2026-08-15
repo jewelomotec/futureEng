@@ -190,7 +190,7 @@ Race finish (`ROBOT_STOPPED`) is not a Pi command; it is the 12-turn + boxed-in 
 | `RECENTER_HALF_MS` | 1000 | Each half of the post-C S-curve (~30 cm); 2 s total |
 | `RECENTER_SERVO_ANGLE` | 20° | Steer during recenter |
 | `WAYPOINT_EXIT_DEG` | 8° | Arrived at C |
-| `WHEELBASE_CM` | 18 | Maps Pi **R** → servo. Lower = more steer for the same R |
+| `WHEELBASE_CM` | **12.8** | Front-wheel centre to rear wheel (cm). Maps Pi **R** → servo |
 | `MAX_TURNS` | 12 | Then allow race stop |
 | `OBSTACLE_TIMEOUT_MS` | 5000 | Auto-clear reverse / old avoid |
 
@@ -204,7 +204,7 @@ Race finish (`ROBOT_STOPPED`) is not a Pi command; it is the 12-turn + boxed-in 
 
 The Pi re-sends `WAYPOINT` while the block stays locked (USB often drops a one-shot). Extra `STOP` / `WAYPOINT` during `PI_HOLD` / `GOTO-C` are ignored. `CLEAR` does not abort an arc already in progress.
 
-If the pass is too wide, lower `WHEELBASE_CM`. Too tight: raise it, or on the Pi use 30 px + new `AB_DISTANCE_CM`.
+If the pass is too wide (not enough curve), **raise** `WHEELBASE_CM`. Too tight: **lower** it, or on the Pi retape `AB_DISTANCE_CM`.
 
 ---
 

@@ -104,7 +104,7 @@ unsigned long arcStartTime = 0;
 //     PI WAYPOINT (STOP / WAYPOINT / REVERSE)
 // ==========================================
 // Pi sends STOP then WAYPOINT,color,xa,ya,xc,yc,R,theta,arclen
-float WHEELBASE_CM = 18.0;                 // used to turn radius into a servo angle
+float WHEELBASE_CM = 12.8;                 // axle-to-axle cm (front wheel centre to rear wheel)
 unsigned long WAYPOINT_PAUSE_MS = 0;       // 0 = no stand-still; drive to C as soon as WAYPOINT arrives
 float WAYPOINT_EXIT_DEG = 8.0;             // IMU heading error that counts as "arrived"
 unsigned long WAYPOINT_MIN_MS = 250;
