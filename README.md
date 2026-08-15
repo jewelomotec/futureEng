@@ -22,7 +22,7 @@ LiDARs + IMU  ------------------------------>  ESP32  -->  motor + servo
 
 1. ESP waits for BNO055 gyro calibration (up to 10 s).
 2. Drives straight at PWM **80**, servo center **117**, PID holds heading. Speed ramps 30 → 80 over 2 s.
-3. Front LiDAR **&lt; 10 cm for 150 ms** → pause **500 ms** (wheels centered) → **reverse-arc** with servo offset `ARC_SERVO_ANGLE` (20°).
+3. Front LiDAR **&lt; 15 cm for 150 ms** → pause **500 ms** (wheels centered) → **reverse-arc** with servo offset `ARC_SERVO_ANGLE` (20°).
 4. When heading is within **8°** of the next cardinal (**0 / 90 / 180 / 270**), wheels center and it drives straight on that heading.
 5. **First** corner: turn toward the side with more space (left vs right LiDAR). After that, **always that same direction**.
 6. After **12** turns, if left and right are both under 100 cm and front under 150 cm for 1 s → race stop.
@@ -40,7 +40,7 @@ Bluetooth telemetry: `MODE: STRAIGHT`, then `PAUSE`, then `ARC`.
 5. When the block is gone for **10** frames, Pi sends `CLEAR`.
 6. Height **&gt; 80 px**: Pi sends `REVERSE` → ESP backs up at −80 until `CLEAR` or 5 s.
 
-Front LiDAR wall-turns only run in `DRIVING_STRAIGHT`. At **10 cm** they should not steal a block the camera already stopped for (~45 px is much farther). After `GOTO-C`, if you are still aimed at a wall under 10 cm, a reverse-arc can still start.
+Front LiDAR wall-turns only run in `DRIVING_STRAIGHT`. At **15 cm** they should not steal a block the camera already stopped for (~45 px is much farther). After `GOTO-C`, if you are still aimed at a wall under 15 cm, a reverse-arc can still start.
 
 ---
 
@@ -128,6 +128,9 @@ The Pi **does not** send `RED` / `GREEN` any more. The ESP still accepts them if
 | `xhci buffer overrun` / UVC probe `-32` / `-71` | USB 3 bandwidth. Plug the Lenovo webcam into a **USB 2** port (not the blue USB 3). Put the ESP (`ttyUSB0`) on a different port. Unplug the cam 5 s. Use this OpenCV `detect.py` at 15 fps — do not open `/dev/video1` (metadata). |
 | `No frames received from camera!` | `pkill -f detect.py`, unplug/replug on USB 2, `v4l2-ctl --list-devices`. Lenovo picture is `/dev/video0`; keep `CAMERA_ID = 0` |
 | `avcodec_send_packet` / `av.AVError` | Old PyAV script. Copy the current `detect.py` (OpenCV) over `~/Documents/Test2_Round2/detect.py` |
+| Overlay `h=` never hits 45 | Height is on the **240×240** working frame, not the 3× preview window. A box that looks ~135 px tall on screen is only ~45 px to the script |
+| Overlay says `STOP` but the car does not | Need `Serial port opened` and `>>> Sent STOP` then `>>> Sent WAYPOINT`. If you see `NO-SERIAL` / `Serial is NOT open`, the ESP never gets the command |
+| `>>> Sent STOP` but Bluetooth never shows `PI-HOLD` / `GOTO-C` | Re-flash this `.ino`. Duplicate STOP/CLEAR no longer abort the arc |
 | Always `CLEAR \| RED:None \| GREEN:None` | Nothing in view, or model/conf too strict. Check the preview boxes |
 | `cp210x ttyUSB0: failed set request ... -110` | Same USB stress as the camera. Separate ports; unplug/replug the ESP |
 | Serial never opens | ESP not on USB, or wrong port. Unplug/replug; `ls /dev/ttyUSB*` |
@@ -178,7 +181,7 @@ Race finish (`ROBOT_STOPPED`) is not a Pi command; it is the 12-turn + boxed-in 
 |---|---|---|
 | `STRAIGHT_SPEED` / `BACKWARD_SPEED` | 80 / −80 | Cruise / reverse PWM |
 | `SERVO_CENTER` / `DIFF` | 117 / 25 | Center and max steer |
-| `FRONT_TURN_DISTANCE` | **10 cm** | Wall reverse-arc trigger (held 150 ms) |
+| `FRONT_TURN_DISTANCE` | **15 cm** | Wall reverse-arc trigger (held 150 ms) |
 | `ARC_PAUSE_MS` | 500 | Stand still before wall reverse |
 | `ARC_SERVO_ANGLE` | 20° | How sharp the **wall** reverse is |
 | `ARC_EXIT_THRESHOLD` | 8° | Wall arc done |
@@ -199,6 +202,8 @@ Bluetooth examples: `FRONT=10`, `CENTER=117`, `STRAIGHT=80`, `ARCANGLE=20`.
 4. Drive forward at 80 until heading is close, or `WAYPOINT_MAX_MS` (4 s).
 5. Center wheels; `straightTargetHeading` = heading from before the stop.
 
+The Pi re-sends `WAYPOINT` while the block stays locked (USB often drops a one-shot). Extra `STOP` / `WAYPOINT` during `PI_HOLD` / `GOTO-C` are ignored. `CLEAR` does not abort an arc already in progress.
+
 If the pass is too wide, lower `WHEELBASE_CM`. Too tight: raise it, or on the Pi use 30 px + new `AB_DISTANCE_CM`.
 
 ---
@@ -206,7 +211,7 @@ If the pass is too wide, lower `WHEELBASE_CM`. Too tight: raise it, or on the Pi
 ## Tuning order
 
 1. Straight: `SERVO_CENTER` so it does not drift; then PID if needed.
-2. Walls: `FRONT_TURN_DISTANCE` 10 cm, then `ARC_SERVO_ANGLE` / pause / exit.
+2. Walls: `FRONT_TURN_DISTANCE` 15 cm, then `ARC_SERVO_ANGLE` / pause / exit.
 3. Blocks: tape `AB_DISTANCE_CM` at 45 px. Run one pillar. If the arc is sharp, `STOP_HEIGHT_PX = 30` and tape AB again. Then `AC_OFFSET_CM`.
 4. ESP `WHEELBASE_CM` last, only if C is right but the curve is too soft/hard.
 

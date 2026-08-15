@@ -76,7 +76,7 @@ const float CARDINAL_HEADINGS[4] = {0.0, 90.0, 180.0, 270.0};
 //      FRONT-DISTANCE TURN TRIGGER
 // ==========================================
 // Start a reversing-arc turn once the front (center) LiDAR stays this close.
-int FRONT_TURN_DISTANCE = 10;              // cm — start the wall reverse-arc once front gets this close
+int FRONT_TURN_DISTANCE = 15;              // cm — start the wall reverse-arc once front gets this close
 bool frontConditionActive = false;         // true while front has been continuously "close"
 unsigned long frontConditionStartTime = 0; // millis() timestamp when it first became true
 const unsigned long FRONT_CONFIRM_MS = 150; // debounce so one noisy reading doesn't trigger a turn
@@ -92,7 +92,7 @@ const unsigned long FRONT_CONFIRM_MS = 150; // debounce so one noisy reading doe
 // Tune these for lane width and how square the exit needs to be:
 int ARC_SERVO_ANGLE = 20;              // degrees off center — how sharp the reverse arc is
 float ARC_EXIT_THRESHOLD = 8.0;        // degrees — how precisely it must face the target before exiting
-unsigned long ARC_PAUSE_MS = 500;      // stand still after the 10 cm / 150 ms confirm, before reversing
+unsigned long ARC_PAUSE_MS = 500;      // stand still after the 15 cm / 150 ms confirm, before reversing
 unsigned long ARC_MIN_MS = 400;        // prevent an instant exit if heading is already close
 unsigned long ARC_MAX_MS = 4000;       // safety timeout — force-exit the arc even if still off heading
 
@@ -451,7 +451,7 @@ void finishArcTurn() {
   lastHeadingTime = millis();
 }
 
-// After the 10 cm / 150 ms confirm: stand still (ARC_PAUSE_MS), then reverse
+// After the 15 cm / 150 ms confirm: stand still (ARC_PAUSE_MS), then reverse
 // with the servo cranked until heading is on the target cardinal.
 void executeTurnMode(float currentHeading) {
   unsigned long now = millis();
@@ -532,6 +532,11 @@ int servoAngleFromRadius(float radiusCm) {
 
 void handlePiStop() {
   lastPiCmd = millis();
+  // Duplicate STOP while already holding / arcing — do not clear waypointReady
+  // or restart the 400 ms pause (Pi retransmits because USB drops packets).
+  if (currentState == PI_HOLD || currentState == WAYPOINT_ARC) {
+    return;
+  }
   waypointStartHeading = getSmoothedHeading();
   piHoldStart = millis();
   waypointReady = false;
@@ -561,6 +566,11 @@ void handlePiWaypoint(String line) {
   }
   if (partCount < 9) {
     Serial.println("PI: WAYPOINT parse error");
+    return;
+  }
+
+  if (currentState == WAYPOINT_ARC) {
+    // Already driving to C — ignore USB retransmits.
     return;
   }
 
@@ -605,9 +615,13 @@ void handlePiReverse() {
 }
 
 void handlePiClear() {
+  if (currentState == WAYPOINT_ARC) {
+    // Detection flicker used to send CLEAR and abort the arc mid-turn.
+    return;
+  }
   if (currentState == OBSTACLE_AVOIDING || currentState == PI_HOLD ||
-      currentState == WAYPOINT_ARC || currentState == PI_REVERSE) {
-    if (currentState == WAYPOINT_ARC || currentState == PI_HOLD) {
+      currentState == PI_REVERSE) {
+    if (currentState == PI_HOLD) {
       straightTargetHeading = waypointStartHeading;
     }
     resumeStraightDriving();
