@@ -126,7 +126,7 @@ float ESTIMATED_FWD_CMS = 30.0;            // rough cm/s at STRAIGHT_SPEED — b
 int SIDE_AVOID_CM = 12;                    // during GOTO-C, steer away if L or R closer than this
 int SIDE_AVOID_SERVO = 28;                 // extra steer away from that wall (degrees off centre)
 unsigned long AFTER_C_PAUSE_MS = 500;      // sit after arriving at C, then recenter
-unsigned long RECENTER_MAX_MS = 1800;      // give up centering after this
+unsigned long RECENTER_MAX_MS = 1000;      // then always return to original heading hold
 int RECENTER_BALANCE_CM = 10;              // |L-R| below this = middle of the lane
 int RECENTER_SERVO = 22;                   // steer toward the side with more space
 unsigned long afterCPhaseStart = 0;
@@ -804,10 +804,9 @@ void executePiRecenter() {
   steeringServo.write(steer);
   finalServoAngle = steer;
 
-  bool timedOut = (millis() - afterCPhaseStart) >= RECENTER_MAX_MS;
-  if (laneIsCentered() || timedOut) {
+  if ((millis() - afterCPhaseStart) >= RECENTER_MAX_MS) {
     resumeStraightDriving();
-    Serial.println(timedOut ? "PI: recenter timeout — holding heading" : "PI: lane middle — holding heading");
+    Serial.println("PI: recenter 1 s done — holding original heading");
   }
 }
 

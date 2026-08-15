@@ -203,7 +203,7 @@ Race finish (`ROBOT_STOPPED`) is not a Pi command; it is the 12-turn + boxed-in 
 | `AFTER_C_PAUSE_MS` | **500** | Sit after arriving at C, then recenter |
 | `RECENTER_BALANCE_CM` | **10** | |L−R| that counts as lane middle |
 | `RECENTER_SERVO` | **22°** | Steer toward the side with more space |
-| `RECENTER_MAX_MS` | **1800** | Stop recentering and hold heading |
+| `RECENTER_MAX_MS` | **1000** | Then always original heading hold |
 | `WAYPOINT_EXIT_DEG` | 8° | Arrived at C |
 | `WHEELBASE_CM` | **18.0** | Maps Pi **R** → servo (round1_2026 value) |
 | `MAX_TURNS` | 12 | Then allow race stop |
