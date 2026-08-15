@@ -1,3 +1,8 @@
+# Round 2 service install notes (`deploy/README.md`)
+
+Official names: **Round 2 service** (this unit file) and **Pi race copy**
+(`round2.py` on the Pi). Full catalog: `docs/CODE_CATALOG.md`.
+
 # Pi service (`round2.service`)
 
 Service name stays `round2`. The script it runs is `round2.py` in

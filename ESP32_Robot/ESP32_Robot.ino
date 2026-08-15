@@ -1,3 +1,13 @@
+// Drive firmware — ESP32_Robot.ino
+// Official name: Drive firmware (ESP32 robot sketch).
+// Runs on the ESP32. Motors, steering servo, TF-Luna LiDARs (mux), BNO055,
+// USB serial from the Pi. Open-challenge walls (reverse-arc) plus obstacle-
+// challenge STOP/WAYPOINT/REVERSE/CLEAR. No camera, no Bluetooth.
+// Named inventory of every function: docs/CODE_CATALOG.md
+//
+// This car: SERVO_CENTER = 106 (repo default below is 117 — change before flash),
+// INVERT_STEERING = true, WHEELBASE_CM = 12.8.
+
 #include <Wire.h>
 #include <math.h>
 #include <Adafruit_Sensor.h>

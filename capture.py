@@ -1,3 +1,12 @@
+#!/usr/bin/env python3
+"""
+Photo capture tool — capture.py
+
+Official name: Photo capture tool.
+Not used at race time. Opens camera 0; press r/g to save red/green cuboid
+JPEGs for the training set. Named inventory: docs/CODE_CATALOG.md
+"""
+
 import cv2
 import os
 

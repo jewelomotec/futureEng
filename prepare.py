@@ -1,3 +1,13 @@
+#!/usr/bin/env python3
+"""
+VOC→YOLO converter — prepare.py
+
+Official name: Dataset converter.
+Not used at race time. Converts Pascal VOC XML + JPEGs into a YOLO dataset
+zip for Colab. Edit BASE to your machine path before running.
+Named inventory: docs/CODE_CATALOG.md
+"""
+
 import os
 import shutil
 import xml.etree.ElementTree as ET

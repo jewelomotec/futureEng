@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """
-WRO Future Engineers block detector — ONNX inference version.
-Serial output: commands + CSV coordinates (center_x,center_y,width,height).
+Block detector — detect.py (canonical race Python in this repo).
 
-Waypoint (this file): when a confirmed block reaches STOP_HEIGHT_PX, freeze
-the robot pose as B, the block as A, and compute pass point C (AC_OFFSET_CM
-laterally). Prints A/B/C and the constant-curvature arc B→C. Sends STOP then
-WAYPOINT over serial. The ESP sketch in ESP32_Robot/ESP32_Robot.ino consumes those
-lines (hold, then forward arc to C).
+Official name: Block detector.
+Same source as wro_block_detector.py. On the Pi, paste into round2.py and
+start with systemd unit round2 (deploy/round2.service).
+
+Runs on the Raspberry Pi: Lenovo webcam + best_ncnn.onnx, votes 5/7 frames,
+freezes A/B/C at STOP_HEIGHT_PX, sends STOP then WAYPOINT (also REVERSE/CLEAR)
+at 115200 to ESP32_Robot.ino. Logs to wro_detect.log.
+
+Does not steer or read LiDAR. Named inventory: docs/CODE_CATALOG.md
 """
 
 import math

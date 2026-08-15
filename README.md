@@ -1,5 +1,8 @@
 # WRO Future Engineers robot
 
+Named inventory of **every file and function** in this repo:
+[`docs/CODE_CATALOG.md`](docs/CODE_CATALOG.md).
+
 Two programs run together:
 
 | Piece | File | Runs on | Job |
@@ -225,10 +228,13 @@ If the pass is too wide (not enough curve), **raise** `WHEELBASE_CM`. Too tight:
 
 ## Other files
 
-| File | Use |
-|---|---|
-| `capture.py` | Webcam tool: `r` / `g` to save cuboid photos |
-| `prepare.py` | Convert Pascal VOC XML to YOLO and zip a dataset |
-| `Final_FutureEnginner.ipynb` | Training notebook |
+Every program is named and described in [`docs/CODE_CATALOG.md`](docs/CODE_CATALOG.md).
+
+| Official name | File | Use |
+|---|---|---|
+| Photo capture tool | `capture.py` | `r` / `g` to save cuboid photos |
+| Dataset converter | `prepare.py` | Pascal VOC XML → YOLO zip |
+| Training notebook | `Final_FutureEnginner.ipynb` | Colab training / ONNX export |
+| Round 2 service | `deploy/round2.service` | systemd unit that starts `round2.py` |
 
 Keep **one** detector process and **one** ESP sketch that understands `STOP`/`WAYPOINT`. Mixing an old PyAV `detect.py` with this ESP, or the new Pi script with an ESP that only knows `RED`/`GREEN`, will look like “nothing happens” on blocks.

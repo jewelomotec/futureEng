@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
 """
-WRO Future Engineers block detector — ONNX inference version.
-Serial output: commands + CSV coordinates (center_x,center_y,width,height).
+Block detector (GitHub name) — wro_block_detector.py
 
-Waypoint (this file): when a confirmed block reaches STOP_HEIGHT_PX, freeze
-the robot pose as B, the block as A, and compute pass point C (AC_OFFSET_CM
-laterally). Prints A/B/C and the constant-curvature arc B→C. Sends STOP then
-WAYPOINT over serial. The ESP sketch in ESP32_Robot/ESP32_Robot.ino consumes those
-lines (hold, then forward arc to C).
+Official name: Block detector, GitHub filename.
+Identical to detect.py. Use either file as the source to paste into round2.py
+on the Pi. Named inventory: docs/CODE_CATALOG.md
 """
 
 import math
