@@ -35,8 +35,8 @@ USB serial (115200) is for the Pi only. Debug `MODE:` lines also go to USB — d
 2. Box height **≥ 45 px** (try **30** if the pass is too sharp):
    - Robot pose = **B**, block = **A**, pass point **C** = A shifted **25 cm** sideways (red → right, green → left).
    - Pi sends `STOP,...` then `WAYPOINT,...`.
-3. ESP: motors off ~**400 ms** (`MODE: PI-HOLD`), then drives **forward** to C (`MODE: GOTO-C`) with servo set from radius **R**. IMU exits when heading is within **8°** of (heading at stop + theta).
-4. Then PID holds the **heading from before the stop** (same lane).
+3. ESP drives **forward** to C (`MODE: GOTO-C`) with servo from radius **R**. IMU exits when heading is within **8°** of (heading at stop + theta).
+4. Then a **~2 s S-curve** (`MODE: RECENTER`, ~60 cm) back toward mid-path, then PID on the **heading from before the stop**.
 5. When the block is gone for **10** frames, Pi sends `CLEAR`.
 6. Height **&gt; 80 px**: Pi sends `REVERSE` → ESP backs up at −80 until `CLEAR` or 5 s.
 
