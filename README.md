@@ -191,10 +191,10 @@ Race finish (`ROBOT_STOPPED`) is not a Pi command; it is the 12-turn + boxed-in 
 | Variable | Default | Role |
 |---|---|---|
 | `STRAIGHT_SPEED` / `BACKWARD_SPEED` | **80** / −80 | Cruise / reverse PWM |
-| `SERVO_CENTER` / `DIFF` | **106** / **35** | Center and max steer on this car |
-| `FRONT_TURN_DISTANCE` | **25 cm** | Wall reverse-arc trigger (held 150 ms) |
+| `SERVO_CENTER` / `DIFF` | **106** / **45** | Center and max steer on this car |
+| `FRONT_TURN_DISTANCE` | **20 cm** | Wall reverse-arc trigger (held 150 ms) |
 | `ARC_PAUSE_MS` | 500 | Stand still before wall reverse |
-| `ARC_SERVO_ANGLE` | **35°** | Wall reverse lock (full DIFF) |
+| `ARC_SERVO_ANGLE` | **45°** | Wall reverse lock (full DIFF) |
 | `ARC_EXIT_THRESHOLD` | 8° | Wall arc done |
 | `ARC_MIN_MS` / `ARC_MAX_MS` | 400 / 4000 | Wall arc timing |
 | `WAYPOINT_PAUSE_MS` | **400** | Sit after Pi `STOP` before GOTO-C |
