@@ -205,7 +205,7 @@ Race finish (`ROBOT_STOPPED`) is not a Pi command; it is the 12-turn + boxed-in 
 | `RECENTER_SERVO` | **22°** | Steer toward the side with more space |
 | `RECENTER_MAX_MS` | **1000** | Then always original heading hold |
 | `WAYPOINT_EXIT_DEG` | 8° | Arrived at C |
-| `WHEELBASE_CM` | **18.0** | Maps Pi **R** → servo (round1_2026 value) |
+| `WHEELBASE_CM` | **13.0** | This bot axle-to-axle (cm). Maps Pi **R** → servo. 600 rpm N20 |
 | `MAX_TURNS` | 12 | Then allow race stop |
 | `OBSTACLE_TIMEOUT_MS` | 5000 | Auto-clear reverse / old avoid |
 

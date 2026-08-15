@@ -113,9 +113,9 @@ logic: extra `STOP` restarts the 400 ms hold; `CLEAR` can abort an arc.
 | `loadTunables` / `saveTunables` / `handleRoot` | WiFi tuner (disabled in `setup`) |
 | `setup` / `loop` | Calibrate BNO, then 20 ms cycle: serial, LiDAR, state machine |
 
-**Flash notes:** keep `INVERT_STEERING = true`, `WHEELBASE_CM = 18.0` (as in
-round1_2026), set `SERVO_CENTER = 106` on this car. Do not open Serial Monitor
-while the Pi owns `/dev/ttyUSB0`.
+**Flash notes:** keep `INVERT_STEERING = true`, `WHEELBASE_CM = 13.0` (this bot,
+600 rpm N20), set `SERVO_CENTER = 106` if that is still this car’s centre. Do not
+open Serial Monitor while the Pi owns `/dev/ttyUSB0`.
 
 ---
 
