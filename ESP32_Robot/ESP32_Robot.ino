@@ -76,6 +76,9 @@ bool avoidDirectionRight = true;               // true = swerve right, false = s
 unsigned long lastObstacleCmd = 0;             // timestamp of last RED/GREEN command
 const unsigned long OBSTACLE_TIMEOUT_MS = 5000; // auto-clear after 5s of no command
 const unsigned long TURN_COOLDOWN_MS = 1000; // how long to ignore front-wall checks after a turn
+// After a Pi waypoint the nose is often still <15 cm from a wall (block in
+// front of a corner). Without this, STRAIGHT immediately starts a reverse-arc.
+const unsigned long WAYPOINT_LIDAR_IGNORE_MS = 2500;
 
 // Cardinal heading snap table — every commanded turn target is forced onto one of these,
 // so sensor noise/drift can never leave the robot aiming at something like 250°.
@@ -337,8 +340,14 @@ int getRampedSpeed(int targetSpeed) {
 
 // Starts a reversing-arc turn once the front (center) LiDAR reports we're
 // within FRONT_TURN_DISTANCE cm, held continuously for FRONT_CONFIRM_MS.
+void ignoreFrontLidarFor(unsigned long ms) {
+  unsigned long until = millis() + ms;
+  if (until > turnCooldownUntil) turnCooldownUntil = until;
+  frontConditionActive = false;
+}
+
 void checkFrontObstacle() {
-  if (millis() < turnCooldownUntil) return;   // skip checking right after a turn
+  if (millis() < turnCooldownUntil) return;   // skip after a wall turn or during/after GOTO-C
   if (currentCenterDist <= 0) { frontConditionActive = false; return; }
 
   if (currentCenterDist < FRONT_TURN_DISTANCE) {
@@ -537,6 +546,7 @@ int servoAngleFromRadius(float radiusCm) {
 
 void handlePiStop() {
   lastPiCmd = millis();
+  ignoreFrontLidarFor(WAYPOINT_LIDAR_IGNORE_MS);
   waypointStartHeading = getSmoothedHeading();
   piHoldStart = millis();
   waypointReady = false;
@@ -550,6 +560,7 @@ void handlePiStop() {
 void handlePiWaypoint(String line) {
   // WAYPOINT,color,xa,ya,xc,yc,R,theta,arclen
   lastPiCmd = millis();
+  ignoreFrontLidarFor(WAYPOINT_LIDAR_IGNORE_MS);
 
   String parts[9];
   int partCount = 0;
@@ -602,6 +613,7 @@ void handlePiWaypoint(String line) {
 
 void handlePiReverse() {
   lastPiCmd = millis();
+  ignoreFrontLidarFor(WAYPOINT_LIDAR_IGNORE_MS);
   waypointReady = false;
   currentState = PI_REVERSE;
   Serial.println("PI: REVERSE");
@@ -613,6 +625,7 @@ void handlePiClear() {
     if (currentState == WAYPOINT_ARC || currentState == PI_HOLD) {
       straightTargetHeading = waypointStartHeading;
     }
+    ignoreFrontLidarFor(WAYPOINT_LIDAR_IGNORE_MS);
     resumeStraightDriving();
     Serial.println("PI: CLEAR — returning to path");
   }
@@ -659,9 +672,11 @@ void executePiHold() {
     currentState = WAYPOINT_ARC;
     waypointArcStart = millis();
     rampArmedForThisPhase = false;
+    ignoreFrontLidarFor(WAYPOINT_LIDAR_IGNORE_MS);
     Serial.println("PI: driving arc to C");
   } else if (!waypointReady && (millis() - piHoldStart > OBSTACLE_TIMEOUT_MS)) {
     straightTargetHeading = waypointStartHeading;
+    ignoreFrontLidarFor(WAYPOINT_LIDAR_IGNORE_MS);
     resumeStraightDriving();
     Serial.println("PI: STOP timeout — no WAYPOINT, resuming");
   }
@@ -691,6 +706,7 @@ void executeWaypointArc(float currentHeading) {
     steeringServo.write(SERVO_CENTER);
     finalServoAngle = SERVO_CENTER;
     straightTargetHeading = waypointStartHeading;
+    ignoreFrontLidarFor(WAYPOINT_LIDAR_IGNORE_MS);
     resumeStraightDriving();
     Serial.println("PI: arrived at C — resuming original heading");
   }
