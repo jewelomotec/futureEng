@@ -4,9 +4,9 @@
 // USB serial only (Pi STOP/WAYPOINT/REVERSE/CLEAR). No BluetoothSerial.
 // Named inventory: docs/CODE_CATALOG.md
 //
-// This car: set SERVO_CENTER = 106 before flash if that is your mechanical centre.
-// INVERT_STEERING = true. This file uses STRAIGHT_SPEED 120, WHEELBASE_CM 18,
-// WAYPOINT_PAUSE_MS 400 as in round1_2026.
+// This car: SERVO_CENTER = 106, DIFF = 35, INVERT_STEERING = true.
+// STRAIGHT_SPEED 80, FRONT_TURN_DISTANCE 25, ARC_SERVO_ANGLE 35, WHEELBASE_CM 18,
+// WAYPOINT_PAUSE_MS 400. Side LiDAR steers off the wall during GOTO-C.
 
 #include <Wire.h>
 #include <math.h>
@@ -46,8 +46,8 @@
 // ==========================================
 //          CONFIGURABLE VARIABLES
 // ==========================================
-int STRAIGHT_SPEED = 120;  // Cruise speed for driving straight (0-255)
-int TURN_SPEED     = 100;  // Kept for tuner compatibility
+int STRAIGHT_SPEED = 80;  // Cruise speed for driving straight (0-255)
+int TURN_SPEED     = 80;  // Kept for tuner compatibility
 int BACKWARD_SPEED = -80; // Speed used during the reversing arc
 
 const int RAMP_START_SPEED = 30;
@@ -55,8 +55,8 @@ const int RAMP_STEP = 30;
 const unsigned long RAMP_DURATION_MS = 2000;
 
 
-int SERVO_CENTER   = 117;   // Dead-center steering alignment
-int DIFF = 25;
+int SERVO_CENTER   = 106;   // Dead-center steering alignment
+int DIFF = 35;
 int SERVO_MAX_LEFT = SERVO_CENTER + DIFF;  // Physical mechanical limit for left turn
 int SERVO_MAX_RIGHT= SERVO_CENTER - DIFF;  // Physical mechanical limit for right turn
 
@@ -88,7 +88,7 @@ const float CARDINAL_HEADINGS[4] = {0.0, 90.0, 180.0, 270.0};
 //      FRONT-DISTANCE TURN TRIGGER
 // ==========================================
 // Start a reversing-arc turn once the front (center) LiDAR stays this close.
-int FRONT_TURN_DISTANCE = 15;              // cm — start the turn maneuver once front gets this close
+int FRONT_TURN_DISTANCE = 25;              // cm — start the turn maneuver once front gets this close
 bool frontConditionActive = false;         // true while front has been continuously "close"
 unsigned long frontConditionStartTime = 0; // millis() timestamp when it first became true
 const unsigned long FRONT_CONFIRM_MS = 150; // debounce so one noisy reading doesn't trigger a turn
@@ -102,7 +102,7 @@ const unsigned long FRONT_CONFIRM_MS = 150; // debounce so one noisy reading doe
 // straight driving resumes.
 //
 // Tune these for lane width and how square the exit needs to be:
-int ARC_SERVO_ANGLE = 25;              // degrees off center — wall reverse (25 = full DIFF lock)
+int ARC_SERVO_ANGLE = 35;              // degrees off center — wall reverse (full DIFF lock)
 float ARC_EXIT_THRESHOLD = 8.0;        // degrees — how precisely it must face the target before exiting
 unsigned long ARC_PAUSE_MS = 500;      // stand still after the 15 cm / 150 ms confirm, before reversing
 unsigned long ARC_MIN_MS = 400;        // prevent an instant exit if heading is already close
@@ -124,7 +124,7 @@ unsigned long WAYPOINT_MIN_MS = 250;
 unsigned long WAYPOINT_MAX_MS = 4000;
 float ESTIMATED_FWD_CMS = 30.0;            // rough cm/s at STRAIGHT_SPEED — backup timer
 int SIDE_AVOID_CM = 12;                    // during GOTO-C, steer away if L or R closer than this
-int SIDE_AVOID_SERVO = 18;                 // extra steer away from that wall (degrees off centre)
+int SIDE_AVOID_SERVO = 28;                 // extra steer away from that wall (degrees off centre)
 
 bool waypointReady = false;
 float waypointStartHeading = 0.0;
