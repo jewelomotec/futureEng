@@ -169,6 +169,7 @@ WiFi tuner (`RobotTuner` / `tunemybot`) is **commented out** in `setup()`. Leave
 | `PAUSE` / `ARC` | Wall reverse-arc |
 | `PI-HOLD` | Pi `STOP` — motors off |
 | `GOTO-C` | Pi waypoint, forward arc |
+| `RECENTER` | S-curve back to mid-path after C (~2 s) |
 | `REVERSE` | Pi too-close backup |
 | `AVOID` | Legacy `RED`/`GREEN` full-lock swerve |
 
@@ -186,6 +187,8 @@ Race finish (`ROBOT_STOPPED`) is not a Pi command; it is the 12-turn + boxed-in 
 | `ARC_EXIT_THRESHOLD` | 8° | Wall arc done |
 | `ARC_MIN_MS` / `ARC_MAX_MS` | 400 / 4000 | Wall arc timing |
 | `WAYPOINT_PAUSE_MS` | 0 | No stand-still after Pi `STOP`; arc starts immediately |
+| `RECENTER_HALF_MS` | 1000 | Each half of the post-C S-curve (~30 cm); 2 s total |
+| `RECENTER_SERVO_ANGLE` | 20° | Steer during recenter |
 | `WAYPOINT_EXIT_DEG` | 8° | Arrived at C |
 | `WHEELBASE_CM` | 18 | Maps Pi **R** → servo. Lower = more steer for the same R |
 | `MAX_TURNS` | 12 | Then allow race stop |
