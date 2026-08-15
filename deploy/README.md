@@ -1,22 +1,13 @@
 # Pi service (`round2.service`)
 
-Copy to the Pi:
+Service name stays `round2`. The script it runs is `round2.py` in
+`/home/pi/Documents/Test2_Round2`.
 
-```bash
-sudo cp round2.service /etc/systemd/system/round2.service
-```
-
-If the Python file is **not** named `detect.py`, edit `ExecStart` so the last path matches your file, for example:
-
-```
-ExecStart=/home/pi/Documents/Test2_Round2/venv/bin/python -u /home/pi/Documents/Test2_Round2/wro_block_detector.py
-```
-
-Then:
+Copy or edit `/etc/systemd/system/round2.service` so `ExecStart` ends with
+`round2.py`, then:
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable --now round2
 sudo systemctl restart round2
 journalctl -u round2 -f
 ```

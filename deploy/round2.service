@@ -5,9 +5,7 @@ After=network.target
 [Service]
 User=pi
 WorkingDirectory=/home/pi/Documents/Test2_Round2
-# Change the last filename if you did not save the script as detect.py
-# (e.g. wro_block_detector.py).
-ExecStart=/home/pi/Documents/Test2_Round2/venv/bin/python -u /home/pi/Documents/Test2_Round2/detect.py
+ExecStart=/home/pi/Documents/Test2_Round2/venv/bin/python -u /home/pi/Documents/Test2_Round2/round2.py
 Restart=always
 RestartSec=2
 Environment=DISPLAY=:0
