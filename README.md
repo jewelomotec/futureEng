@@ -24,7 +24,7 @@ LiDARs + IMU  ------------------------------>  ESP32  -->  motor + servo
 ### Walls (LiDAR + IMU, no Pi needed)
 
 1. ESP waits for BNO055 gyro calibration (up to 10 s).
-2. Drives straight at PWM **80**, servo center **117**, PID holds heading. Speed ramps 30 → 80 over 2 s.
+2. Drives straight at PWM **120**, servo center **117** (set **106** on this car), PID holds heading. Speed ramps 30 → 120 over 2 s.
 3. Front LiDAR **&lt; 15 cm for 150 ms** → pause **500 ms** (wheels centered) → **reverse-arc** with servo offset `ARC_SERVO_ANGLE` (20°).
 4. When heading is within **8°** of the next cardinal (**0 / 90 / 180 / 270**), wheels center and it drives straight on that heading.
 5. **First** corner: turn toward the side with more space (left vs right LiDAR). After that, **always that same direction**.
@@ -38,8 +38,8 @@ USB serial (115200) is for the Pi only. Debug `MODE:` lines also go to USB — d
 2. Box height **≥ 45 px** (try **30** if the pass is too sharp):
    - Robot pose = **B**, block = **A**, pass point **C** = A shifted **25 cm** sideways (red → right, green → left).
    - Pi sends `STOP,...` then `WAYPOINT,...`.
-3. ESP drives **forward** to C (`MODE: GOTO-C`) with servo from radius **R**. IMU exits when heading is within **8°** of (heading at stop + theta).
-4. Then PID on the **heading from before the stop** (`MODE: STRAIGHT`). No extra S-curve.
+3. ESP sits **400 ms**, then drives **forward** to C (`MODE: GOTO-C`) with servo from radius **R**. IMU exits when heading is within **8°** of (heading at stop + theta).
+4. Then PID on the **heading from before the stop**. No S-curve. Extra `STOP` can restart the hold; `CLEAR` can abort an arc still running.
 5. When the block is gone for **10** frames, Pi sends `CLEAR`.
 6. Height **&gt; 80 px**: Pi sends `REVERSE` → ESP backs up at −80 until `CLEAR` or 5 s.
 
@@ -190,16 +190,16 @@ Race finish (`ROBOT_STOPPED`) is not a Pi command; it is the 12-turn + boxed-in 
 
 | Variable | Default | Role |
 |---|---|---|
-| `STRAIGHT_SPEED` / `BACKWARD_SPEED` | 80 / −80 | Cruise / reverse PWM |
-| `SERVO_CENTER` / `DIFF` | 117 / 25 | Center and max steer |
+| `STRAIGHT_SPEED` / `BACKWARD_SPEED` | **120** / −80 | Cruise / reverse PWM |
+| `SERVO_CENTER` / `DIFF` | 117 / 25 | Center and max steer (this car: **106**) |
 | `FRONT_TURN_DISTANCE` | **15 cm** | Wall reverse-arc trigger (held 150 ms) |
 | `ARC_PAUSE_MS` | 500 | Stand still before wall reverse |
 | `ARC_SERVO_ANGLE` | 20° | How sharp the **wall** reverse is |
 | `ARC_EXIT_THRESHOLD` | 8° | Wall arc done |
 | `ARC_MIN_MS` / `ARC_MAX_MS` | 400 / 4000 | Wall arc timing |
-| `WAYPOINT_PAUSE_MS` | 0 | No stand-still after Pi `STOP`; arc starts immediately |
+| `WAYPOINT_PAUSE_MS` | **400** | Sit after Pi `STOP` before GOTO-C |
 | `WAYPOINT_EXIT_DEG` | 8° | Arrived at C |
-| `WHEELBASE_CM` | **12.8** | Front-wheel centre to rear wheel (cm). Maps Pi **R** → servo |
+| `WHEELBASE_CM` | **18.0** | Maps Pi **R** → servo (round1_2026 value) |
 | `MAX_TURNS` | 12 | Then allow race stop |
 | `OBSTACLE_TIMEOUT_MS` | 5000 | Auto-clear reverse / old avoid |
 
@@ -208,10 +208,10 @@ Race finish (`ROBOT_STOPPED`) is not a Pi command; it is the 12-turn + boxed-in 
 1. Parse `R`, `theta`, `arc_len`.
 2. Target heading = heading at `STOP` **+ theta** (BNO heading increases on a right turn).
 3. Servo from `atan(WHEELBASE_CM / |R|)`, clamped to `DIFF`, inverted if `INVERT_STEERING`.
-4. Drive forward at 80 until heading is close, or `WAYPOINT_MAX_MS` (4 s).
+4. Sit 400 ms, then drive forward at 120 until heading is close, or `WAYPOINT_MAX_MS` (4 s).
 5. Center wheels; `straightTargetHeading` = heading from before the stop.
 
-The Pi re-sends `WAYPOINT` for **1.2 s** after lock (USB often drops a one-shot). Extra `STOP` / `WAYPOINT` during `PI_HOLD` / `GOTO-C` are ignored. After arriving at C, the ESP **ignores** further `STOP` / `WAYPOINT` until `CLEAR` (block gone for 10 frames) so the same pass is not driven twice. `CLEAR` does not abort an arc already in progress.
+This sketch is **round1_2026 with Bluetooth removed**. There is no `SerialBT`. Extra `STOP` restarts the hold. `CLEAR` can abort `GOTO-C`.
 
 If the pass is too wide (not enough curve), **raise** `WHEELBASE_CM`. Too tight: **lower** it, or on the Pi retape `AB_DISTANCE_CM`.
 

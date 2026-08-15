@@ -1,12 +1,12 @@
 // Drive firmware — ESP32_Robot.ino
 // Official name: Drive firmware (ESP32 robot sketch).
-// Runs on the ESP32. Motors, steering servo, TF-Luna LiDARs (mux), BNO055,
-// USB serial from the Pi. Open-challenge walls (reverse-arc) plus obstacle-
-// challenge STOP/WAYPOINT/REVERSE/CLEAR. No camera, no Bluetooth.
-// Named inventory of every function: docs/CODE_CATALOG.md
+// Source: user's round1_2026.cpp with Bluetooth removed.
+// USB serial only (Pi STOP/WAYPOINT/REVERSE/CLEAR). No BluetoothSerial.
+// Named inventory: docs/CODE_CATALOG.md
 //
-// This car: SERVO_CENTER = 106 (repo default below is 117 — change before flash),
-// INVERT_STEERING = true, WHEELBASE_CM = 12.8.
+// This car: set SERVO_CENTER = 106 before flash if that is your mechanical centre.
+// INVERT_STEERING = true. This file uses STRAIGHT_SPEED 120, WHEELBASE_CM 18,
+// WAYPOINT_PAUSE_MS 400 as in round1_2026.
 
 #include <Wire.h>
 #include <math.h>
@@ -46,8 +46,8 @@
 // ==========================================
 //          CONFIGURABLE VARIABLES
 // ==========================================
-int STRAIGHT_SPEED = 80;  // Cruise speed for driving straight (0-255)
-int TURN_SPEED     = 80;  // Kept for WiFi tuner compatibility
+int STRAIGHT_SPEED = 120;  // Cruise speed for driving straight (0-255)
+int TURN_SPEED     = 100;  // Kept for tuner compatibility
 int BACKWARD_SPEED = -80; // Speed used during the reversing arc
 
 const int RAMP_START_SPEED = 30;
@@ -85,7 +85,7 @@ const float CARDINAL_HEADINGS[4] = {0.0, 90.0, 180.0, 270.0};
 //      FRONT-DISTANCE TURN TRIGGER
 // ==========================================
 // Start a reversing-arc turn once the front (center) LiDAR stays this close.
-int FRONT_TURN_DISTANCE = 15;              // cm — start the wall reverse-arc once front gets this close
+int FRONT_TURN_DISTANCE = 15;              // cm — start the turn maneuver once front gets this close
 bool frontConditionActive = false;         // true while front has been continuously "close"
 unsigned long frontConditionStartTime = 0; // millis() timestamp when it first became true
 const unsigned long FRONT_CONFIRM_MS = 150; // debounce so one noisy reading doesn't trigger a turn
@@ -114,8 +114,8 @@ unsigned long arcStartTime = 0;
 //     PI WAYPOINT (STOP / WAYPOINT / REVERSE)
 // ==========================================
 // Pi sends STOP then WAYPOINT,color,xa,ya,xc,yc,R,theta,arclen
-float WHEELBASE_CM = 12.8;                 // axle-to-axle cm (front wheel centre to rear wheel)
-unsigned long WAYPOINT_PAUSE_MS = 0;       // 0 = no stand-still; drive to C as soon as WAYPOINT arrives
+float WHEELBASE_CM = 18.0;                 // used to turn radius into a servo angle
+unsigned long WAYPOINT_PAUSE_MS = 400;     // stand still after STOP before driving to C
 float WAYPOINT_EXIT_DEG = 8.0;             // IMU heading error that counts as "arrived"
 unsigned long WAYPOINT_MIN_MS = 250;
 unsigned long WAYPOINT_MAX_MS = 4000;
@@ -131,9 +131,6 @@ int waypointServoAngle = 90;
 unsigned long piHoldStart = 0;
 unsigned long waypointArcStart = 0;
 unsigned long lastPiCmd = 0;
-// After GOTO-C, Pi still resends STOP/WAYPOINT while the block is in view.
-// Ignore those until CLEAR so the same pass is not driven twice.
-bool waypointDoneUntilClear = false;
 
 
 // ==========================================
@@ -540,11 +537,6 @@ int servoAngleFromRadius(float radiusCm) {
 
 void handlePiStop() {
   lastPiCmd = millis();
-  // Duplicate STOP while already holding / arcing — do not clear waypointReady
-  // or restart the 400 ms pause (Pi retransmits because USB drops packets).
-  if (waypointDoneUntilClear || currentState == PI_HOLD || currentState == WAYPOINT_ARC) {
-    return;
-  }
   waypointStartHeading = getSmoothedHeading();
   piHoldStart = millis();
   waypointReady = false;
@@ -573,11 +565,6 @@ void handlePiWaypoint(String line) {
   }
   if (partCount < 9) {
     Serial.println("PI: WAYPOINT parse error");
-    return;
-  }
-
-  if (waypointDoneUntilClear || currentState == WAYPOINT_ARC) {
-    // Already driving to C, or this sighting already finished — ignore USB retransmits.
     return;
   }
 
@@ -621,14 +608,9 @@ void handlePiReverse() {
 }
 
 void handlePiClear() {
-  if (currentState == WAYPOINT_ARC) {
-    // Detection flicker used to send CLEAR and abort the arc mid-turn.
-    return;
-  }
-  waypointDoneUntilClear = false;
   if (currentState == OBSTACLE_AVOIDING || currentState == PI_HOLD ||
-      currentState == PI_REVERSE) {
-    if (currentState == PI_HOLD) {
+      currentState == WAYPOINT_ARC || currentState == PI_REVERSE) {
+    if (currentState == WAYPOINT_ARC || currentState == PI_HOLD) {
       straightTargetHeading = waypointStartHeading;
     }
     resumeStraightDriving();
@@ -706,10 +688,11 @@ void executeWaypointArc(float currentHeading) {
   bool distanceGuess = elapsed >= expectedMs && headingClose;
 
   if ((minTime && headingClose) || distanceGuess || maxTime) {
+    steeringServo.write(SERVO_CENTER);
+    finalServoAngle = SERVO_CENTER;
     straightTargetHeading = waypointStartHeading;
-    waypointDoneUntilClear = true;
     resumeStraightDriving();
-    Serial.println("PI: arrived at C — holding original heading");
+    Serial.println("PI: arrived at C — resuming original heading");
   }
 }
 
@@ -1130,6 +1113,7 @@ void loop() {
     resumeStraightDriving();
     Serial.println("OBSTACLE: Timeout - Auto returning to path");
   }
+
   if (currentState == ROBOT_STOPPED) {
     setMotorOutput(0);
     steeringServo.write(SERVO_CENTER);

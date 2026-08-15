@@ -70,7 +70,7 @@ exists in the file but is commented out in `setup()`.
 
 | Enum | Telemetry `MODE` | What the car does |
 |---|---|---|
-| `DRIVING_STRAIGHT` | `STRAIGHT` | PID heading hold, cruise PWM 80 |
+| `DRIVING_STRAIGHT` | `STRAIGHT` | PID heading hold, cruise PWM 120 |
 | `TURNING` + `PHASE_PAUSE` | `PAUSE` | Wall: sit 500 ms, wheels centered |
 | `TURNING` + `PHASE_REVERSE` | `ARC` | Wall: reverse with servo ±20° to next cardinal |
 | `PI_HOLD` | `PI-HOLD` | Pi `STOP`: motors off until `WAYPOINT` |
@@ -79,9 +79,9 @@ exists in the file but is commented out in `setup()`.
 | `OBSTACLE_AVOIDING` | `AVOID` | Legacy `RED`/`GREEN` full-lock swerve |
 | `ROBOT_STOPPED` | (no drive) | 12 turns + L/R &lt; 100 cm, front &lt; 150 cm |
 
-There is **no** `PI_RECENTER` / S-curve. After `GOTO-C` it returns to `STRAIGHT`
-on the heading from before `STOP`. `waypointDoneUntilClear` then ignores extra
-`STOP`/`WAYPOINT` until `CLEAR` so the same block is not driven twice.
+There is **no** `PI_RECENTER` / S-curve and **no Bluetooth**. After `GOTO-C` it
+returns to `STRAIGHT` on the heading from before `STOP`. This is round1_2026
+logic: extra `STOP` restarts the 400 ms hold; `CLEAR` can abort an arc.
 
 **Functions (named)**
 
@@ -94,7 +94,7 @@ on the heading from before `STOP`. `waypointDoneUntilClear` then ignores extra
 | `computeTurnTarget` | Next cardinal left or right of current heading |
 | `shortestAngleDiff` / `wrapHeading` | Heading arithmetic |
 | `setMotorOutput` | Signed PWM: +forward, −reverse |
-| `getRampedSpeed` | 30→80 over 2 s after a standstill |
+| `getRampedSpeed` | 30→120 over 2 s after a standstill |
 | `checkFrontObstacle` | Front &lt; 15 cm for 150 ms → start wall turn |
 | `driveStraightMode` | PID on `straightTargetHeading` |
 | `reversingArcServoAngle` | Wall reverse: crank opposite the intended turn |
@@ -102,20 +102,20 @@ on the heading from before `STOP`. `waypointDoneUntilClear` then ignores extra
 | `finishArcTurn` | Count a wall turn, resume straight on new cardinal |
 | `servoAngleFromRadius` | `atan(WHEELBASE_CM / \|R\|)` → servo, respects invert |
 | `handlePiLine` | Split first CSV field: STOP / WAYPOINT / REVERSE / CLEAR / RED / GREEN |
-| `handlePiStop` | Enter `PI_HOLD` unless already arcing or waypoint already done |
+| `handlePiStop` | Enter `PI_HOLD` (restarts if STOP arrives again) |
 | `handlePiWaypoint` | Parse R, theta, arc_len; arm `waypointReady` |
-| `handlePiReverse` / `handlePiClear` | Backup; release latch / resume if not mid-arc |
-| `executePiHold` | Wait `WAYPOINT_PAUSE_MS` (0) then start `GOTO-C` |
-| `executeWaypointArc` | Forward at 80 until IMU or timer; then latch + straight |
+| `handlePiReverse` / `handlePiClear` | Backup; CLEAR resumes even mid-arc |
+| `executePiHold` | Wait `WAYPOINT_PAUSE_MS` (400) then start `GOTO-C` |
+| `executeWaypointArc` | Forward at 120 until IMU or timer; then straight |
 | `executePiReverse` | Reverse until timeout |
 | `avoidObstacle` | Legacy full-lock swerve |
 | `printTelemetry` | USB `MODE:` line (Pi logs these as `ESP …`) |
 | `loadTunables` / `saveTunables` / `handleRoot` | WiFi tuner (disabled in `setup`) |
 | `setup` / `loop` | Calibrate BNO, then 20 ms cycle: serial, LiDAR, state machine |
 
-**Flash notes:** keep `INVERT_STEERING = true`, `WHEELBASE_CM = 12.8`, set
-`SERVO_CENTER = 106` on this car. Do not open Serial Monitor while the Pi
-owns `/dev/ttyUSB0`.
+**Flash notes:** keep `INVERT_STEERING = true`, `WHEELBASE_CM = 18.0` (as in
+round1_2026), set `SERVO_CENTER = 106` on this car. Do not open Serial Monitor
+while the Pi owns `/dev/ttyUSB0`.
 
 ---
 
