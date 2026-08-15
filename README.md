@@ -214,6 +214,30 @@ If the pass is too wide, lower `WHEELBASE_CM`. Too tight: raise it, or on the Pi
 
 ---
 
+## Raspberry Pi boot service
+
+Runs `detect.py` at boot (headless, no OpenCV window). One process only — do not also start `python detect.py` by hand.
+
+On the Pi, from this repo (or copy `systemd/` next to `detect.py`):
+
+```bash
+# put detect.py + best_ncnn.onnx in ~/Documents/Test2_Round2 (and keep the venv there)
+cp detect.py ~/Documents/Test2_Round2/detect.py
+bash systemd/install-wro-detect-service.sh
+```
+
+The installer writes `/etc/systemd/system/wro-detect.service` with your user, `WorkingDirectory`, and `venv/bin/python` if present.
+
+```bash
+journalctl -u wro-detect -f          # live log (look for Camera opened / Serial port opened)
+sudo systemctl stop wro-detect       # before a manual test
+sudo systemctl disable --now wro-detect
+```
+
+`WRO_HEADLESS=1` skips the preview window so it can start without a desktop. For a window, stop the service and run `python detect.py` on the Pi desktop.
+
+---
+
 ## Other files
 
 | File | Use |

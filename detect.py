@@ -11,6 +11,7 @@ lines (hold, then forward arc to C).
 """
 
 import math
+import os
 import time
 import threading
 import queue
@@ -43,6 +44,8 @@ CAMERA_HEIGHT = 480
 CAMERA_FPS = 15                  # 30 fps on Pi USB3 often overruns xHCI (dmesg buffer overrun)
 SERIAL_PORTS = ("/dev/ttyUSB0", "/dev/ttyUSB1", "/dev/ttyAMA0")
 SERIAL_BAUD = 115200
+# Set WRO_HEADLESS=1 (the systemd unit does) to skip the OpenCV window at boot.
+HEADLESS = os.environ.get("WRO_HEADLESS", "").strip().lower() in ("1", "true", "yes")
 
 # How many recent frames must see the same colour before we trust it.
 VOTE_HISTORY = 7
@@ -428,7 +431,10 @@ def main(camera_id: int = CAMERA_ID, frame_size: int = FRAME_SIZE):
         return
 
     window_name = "WRO Block Detector (ONNX)"
-    cv2.namedWindow(window_name)
+    if not HEADLESS:
+        cv2.namedWindow(window_name)
+    else:
+        print("Headless mode (WRO_HEADLESS=1): no preview window", flush=True)
 
     red_hist = deque(maxlen=VOTE_HISTORY)
     green_hist = deque(maxlen=VOTE_HISTORY)
@@ -583,14 +589,14 @@ def main(camera_id: int = CAMERA_ID, frame_size: int = FRAME_SIZE):
                 )
 
             display = upscale_for_display(display, scale=3)
-            cv2.imshow(window_name, display)
             frame_count += 1
-
             print(f"Frame {frame_count} | {decision} | RED:{red_box} | GREEN:{green_box}", flush=True)
 
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord('q'):
-                break
+            if not HEADLESS:
+                cv2.imshow(window_name, display)
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord('q'):
+                    break
 
     except KeyboardInterrupt:
         pass
@@ -604,7 +610,8 @@ def main(camera_id: int = CAMERA_ID, frame_size: int = FRAME_SIZE):
                 pass
         if ser is not None:
             ser.close()
-        cv2.destroyAllWindows()
+        if not HEADLESS:
+            cv2.destroyAllWindows()
 
 if __name__ == "__main__":
     main()

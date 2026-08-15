@@ -1,0 +1,26 @@
+[Unit]
+Description=WRO Future Engineers ONNX block detector
+Documentation=https://github.com/jewelomotec/futureEng
+After=local-fs.target
+# Camera and ESP USB often enumerate a few seconds after boot.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+SupplementaryGroups=video dialout render plugdev
+WorkingDirectory=/home/pi/Documents/Test2_Round2
+Environment=PYTHONUNBUFFERED=1
+Environment=WRO_HEADLESS=1
+EnvironmentFile=-/etc/default/wro-detect
+ExecStart=/home/pi/Documents/Test2_Round2/venv/bin/python -u /home/pi/Documents/Test2_Round2/detect.py
+Restart=always
+RestartSec=5
+Nice=5
+
+# If the venv path is wrong, fall back is not automatic — edit WorkingDirectory
+# and ExecStart, or run systemd/install-wro-detect-service.sh on the Pi.
+
+[Install]
+WantedBy=multi-user.target
