@@ -208,7 +208,7 @@ Race finish (`ROBOT_STOPPED`) is not a Pi command; it is the 12-turn + boxed-in 
 4. Drive forward at 80 until heading is close, or `WAYPOINT_MAX_MS` (4 s).
 5. Center wheels; `straightTargetHeading` = heading from before the stop.
 
-The Pi re-sends `WAYPOINT` while the block stays locked (USB often drops a one-shot). Extra `STOP` / `WAYPOINT` during `PI_HOLD` / `GOTO-C` are ignored. `CLEAR` does not abort an arc already in progress.
+The Pi re-sends `WAYPOINT` for **1.2 s** after lock (USB often drops a one-shot). Extra `STOP` / `WAYPOINT` during `PI_HOLD` / `GOTO-C` are ignored. After arriving at C, the ESP **ignores** further `STOP` / `WAYPOINT` until `CLEAR` (block gone for 10 frames) so the same pass is not driven twice. `CLEAR` does not abort an arc already in progress.
 
 If the pass is too wide (not enough curve), **raise** `WHEELBASE_CM`. Too tight: **lower** it, or on the Pi retape `AB_DISTANCE_CM`.
 

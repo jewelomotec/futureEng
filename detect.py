@@ -55,6 +55,7 @@ CLEAR_HISTORY = 10              # consecutive CLEAR frames before we drop a wayp
 # Too close — abort / reverse.
 REVERSE_HEIGHT_PX = 80
 WAYPOINT_RESEND_S = 0.4         # re-send WAYPOINT while locked (USB often drops a one-shot)
+WAYPOINT_RESEND_WINDOW_S = 1.2  # then stop; ESP ignores extras after GOTO-C until CLEAR
 
 # ---------------------------------------------------------------------------
 # Waypoint geometry — measure AB_DISTANCE_CM on the table at STOP_HEIGHT_PX
@@ -508,6 +509,7 @@ def main(camera_id: int = CAMERA_ID, frame_size: int = FRAME_SIZE):
     frame_count = 0
     clear_counter = 0
     waypoint_lock = None   # frozen A/B/C until the block is gone (CLEAR)
+    waypoint_lock_time = 0.0
     last_wp_send_time = 0.0
     sent_stop_for_lock = False
 
@@ -582,6 +584,7 @@ def main(camera_id: int = CAMERA_ID, frame_size: int = FRAME_SIZE):
                 print_waypoint(waypoint_lock)
                 sent_stop_for_lock = False
                 last_wp_send_time = 0.0
+                waypoint_lock_time = time.time()
             elif decision == "REVERSE":
                 waypoint_lock = None
                 sent_stop_for_lock = False
@@ -608,8 +611,9 @@ def main(camera_id: int = CAMERA_ID, frame_size: int = FRAME_SIZE):
                         serial_write(cmd_str)
                         last_sent = cmd_str
                 elif ser is not None and decision == "STOP" and waypoint_lock is not None:
+                    still_retrying = (now - waypoint_lock_time) <= WAYPOINT_RESEND_WINDOW_S
                     due = (now - last_wp_send_time) >= WAYPOINT_RESEND_S
-                    if (not sent_stop_for_lock) or due:
+                    if still_retrying and ((not sent_stop_for_lock) or due):
                         if not sent_stop_for_lock:
                             stop_box = waypoint_lock["box"]
                             serial_write(

@@ -121,6 +121,9 @@ int waypointServoAngle = 90;
 unsigned long piHoldStart = 0;
 unsigned long waypointArcStart = 0;
 unsigned long lastPiCmd = 0;
+// After GOTO-C, Pi still resends STOP/WAYPOINT while the block is in view.
+// Ignore those until CLEAR so the same pass is not driven twice.
+bool waypointDoneUntilClear = false;
 
 
 // ==========================================
@@ -529,7 +532,7 @@ void handlePiStop() {
   lastPiCmd = millis();
   // Duplicate STOP while already holding / arcing — do not clear waypointReady
   // or restart the 400 ms pause (Pi retransmits because USB drops packets).
-  if (currentState == PI_HOLD || currentState == WAYPOINT_ARC) {
+  if (waypointDoneUntilClear || currentState == PI_HOLD || currentState == WAYPOINT_ARC) {
     return;
   }
   waypointStartHeading = getSmoothedHeading();
@@ -563,8 +566,8 @@ void handlePiWaypoint(String line) {
     return;
   }
 
-  if (currentState == WAYPOINT_ARC) {
-    // Already driving to C — ignore USB retransmits.
+  if (waypointDoneUntilClear || currentState == WAYPOINT_ARC) {
+    // Already driving to C, or this sighting already finished — ignore USB retransmits.
     return;
   }
 
@@ -612,6 +615,7 @@ void handlePiClear() {
     // Detection flicker used to send CLEAR and abort the arc mid-turn.
     return;
   }
+  waypointDoneUntilClear = false;
   if (currentState == OBSTACLE_AVOIDING || currentState == PI_HOLD ||
       currentState == PI_REVERSE) {
     if (currentState == PI_HOLD) {
@@ -693,6 +697,7 @@ void executeWaypointArc(float currentHeading) {
 
   if ((minTime && headingClose) || distanceGuess || maxTime) {
     straightTargetHeading = waypointStartHeading;
+    waypointDoneUntilClear = true;
     resumeStraightDriving();
     Serial.println("PI: arrived at C — holding original heading");
   }
