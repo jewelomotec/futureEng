@@ -36,7 +36,7 @@ USB serial (115200) is for the Pi only. Debug `MODE:` lines also go to USB — d
    - Robot pose = **B**, block = **A**, pass point **C** = A shifted **25 cm** sideways (red → right, green → left).
    - Pi sends `STOP,...` then `WAYPOINT,...`.
 3. ESP drives **forward** to C (`MODE: GOTO-C`) with servo from radius **R**. IMU exits when heading is within **8°** of (heading at stop + theta).
-4. Then a **~2 s S-curve** (`MODE: RECENTER`, ~60 cm) back toward mid-path, then PID on the **heading from before the stop**.
+4. Then PID on the **heading from before the stop** (`MODE: STRAIGHT`). No extra S-curve.
 5. When the block is gone for **10** frames, Pi sends `CLEAR`.
 6. Height **&gt; 80 px**: Pi sends `REVERSE` → ESP backs up at −80 until `CLEAR` or 5 s.
 
@@ -178,7 +178,6 @@ WiFi tuner (`RobotTuner` / `tunemybot`) is **commented out** in `setup()`. Leave
 | `PAUSE` / `ARC` | Wall reverse-arc |
 | `PI-HOLD` | Pi `STOP` — motors off |
 | `GOTO-C` | Pi waypoint, forward arc |
-| `RECENTER` | S-curve back to mid-path after C (~2 s) |
 | `REVERSE` | Pi too-close backup |
 | `AVOID` | Legacy `RED`/`GREEN` full-lock swerve |
 
@@ -196,8 +195,6 @@ Race finish (`ROBOT_STOPPED`) is not a Pi command; it is the 12-turn + boxed-in 
 | `ARC_EXIT_THRESHOLD` | 8° | Wall arc done |
 | `ARC_MIN_MS` / `ARC_MAX_MS` | 400 / 4000 | Wall arc timing |
 | `WAYPOINT_PAUSE_MS` | 0 | No stand-still after Pi `STOP`; arc starts immediately |
-| `RECENTER_HALF_MS` | 1000 | Each half of the post-C S-curve (~30 cm); 2 s total |
-| `RECENTER_SERVO_ANGLE` | 20° | Steer during recenter |
 | `WAYPOINT_EXIT_DEG` | 8° | Arrived at C |
 | `WHEELBASE_CM` | **12.8** | Front-wheel centre to rear wheel (cm). Maps Pi **R** → servo |
 | `MAX_TURNS` | 12 | Then allow race stop |

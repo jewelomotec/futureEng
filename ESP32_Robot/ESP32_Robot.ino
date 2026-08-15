@@ -111,13 +111,6 @@ unsigned long WAYPOINT_MIN_MS = 250;
 unsigned long WAYPOINT_MAX_MS = 4000;
 float ESTIMATED_FWD_CMS = 30.0;            // rough cm/s at STRAIGHT_SPEED — backup timer
 
-// After GOTO-C: S-curve back toward lane center (~60 cm / ~2 s at cruise).
-int RECENTER_SERVO_ANGLE = 20;             // degrees off center each half of the S
-unsigned long RECENTER_HALF_MS = 1000;     // 1000 + 1000 ms; ~30 cm each half
-int recenterPhase = 0;                     // 0 = toward center, 1 = unwind
-unsigned long recenterPhaseStart = 0;
-bool recenterFirstTurnRight = false;       // first half steer direction
-
 bool waypointReady = false;
 float waypointStartHeading = 0.0;
 float waypointTargetHeading = 0.0;
@@ -156,8 +149,7 @@ enum RobotState {
   OBSTACLE_AVOIDING,
   PI_HOLD,
   WAYPOINT_ARC,
-  PI_REVERSE,
-  PI_RECENTER
+  PI_REVERSE
 };
 RobotState currentState = DRIVING_STRAIGHT;
 
@@ -533,25 +525,11 @@ int servoAngleFromRadius(float radiusCm) {
   return constrain(angle, SERVO_MAX_RIGHT, SERVO_MAX_LEFT);
 }
 
-int forwardSteerAngle(bool turnRight, int offsetDeg) {
-  int offset = constrain(offsetDeg, 0, DIFF);
-  int angle;
-  if (offset == 0) {
-    angle = SERVO_CENTER;
-  } else if (INVERT_STEERING) {
-    angle = turnRight ? (SERVO_CENTER + offset) : (SERVO_CENTER - offset);
-  } else {
-    angle = turnRight ? (SERVO_CENTER - offset) : (SERVO_CENTER + offset);
-  }
-  return constrain(angle, SERVO_MAX_RIGHT, SERVO_MAX_LEFT);
-}
-
 void handlePiStop() {
   lastPiCmd = millis();
   // Duplicate STOP while already holding / arcing — do not clear waypointReady
   // or restart the 400 ms pause (Pi retransmits because USB drops packets).
-  if (currentState == PI_HOLD || currentState == WAYPOINT_ARC ||
-      currentState == PI_RECENTER) {
+  if (currentState == PI_HOLD || currentState == WAYPOINT_ARC) {
     return;
   }
   waypointStartHeading = getSmoothedHeading();
@@ -585,8 +563,8 @@ void handlePiWaypoint(String line) {
     return;
   }
 
-  if (currentState == WAYPOINT_ARC || currentState == PI_RECENTER) {
-    // Already driving to C / recentering — ignore USB retransmits.
+  if (currentState == WAYPOINT_ARC) {
+    // Already driving to C — ignore USB retransmits.
     return;
   }
 
@@ -630,7 +608,7 @@ void handlePiReverse() {
 }
 
 void handlePiClear() {
-  if (currentState == WAYPOINT_ARC || currentState == PI_RECENTER) {
+  if (currentState == WAYPOINT_ARC) {
     // Detection flicker used to send CLEAR and abort the arc mid-turn.
     return;
   }
@@ -715,35 +693,8 @@ void executeWaypointArc(float currentHeading) {
 
   if ((minTime && headingClose) || distanceGuess || maxTime) {
     straightTargetHeading = waypointStartHeading;
-    if (!isfinite(waypointRadiusCm) || fabs(waypointRadiusCm) > 400.0) {
-      resumeStraightDriving();
-      Serial.println("PI: arrived at C — already centered, no S-curve");
-    } else {
-      // Pass was to the right (R>0) => sit right of center => first steer left.
-      recenterFirstTurnRight = !(waypointRadiusCm > 0.0);
-      recenterPhase = 0;
-      recenterPhaseStart = millis();
-      currentState = PI_RECENTER;
-      rampArmedForThisPhase = false;
-      Serial.println("PI: arrived at C — S-curve back to mid-path");
-    }
-  }
-}
-
-void executePiRecenter() {
-  setMotorOutput(STRAIGHT_SPEED);
-  bool turnRight = (recenterPhase == 0) ? recenterFirstTurnRight : !recenterFirstTurnRight;
-  finalServoAngle = forwardSteerAngle(turnRight, RECENTER_SERVO_ANGLE);
-  steeringServo.write(finalServoAngle);
-
-  if (millis() - recenterPhaseStart >= RECENTER_HALF_MS) {
-    if (recenterPhase == 0) {
-      recenterPhase = 1;
-      recenterPhaseStart = millis();
-    } else {
-      resumeStraightDriving();
-      Serial.println("PI: recenter done — holding original heading");
-    }
+    resumeStraightDriving();
+    Serial.println("PI: arrived at C — holding original heading");
   }
 }
 
@@ -783,7 +734,6 @@ void printTelemetry(float currentHeading) {
   else if (currentState == PI_HOLD)           btPrint("MODE: PI-HOLD ");
   else if (currentState == WAYPOINT_ARC)      btPrint("MODE: GOTO-C  ");
   else if (currentState == PI_REVERSE)        btPrint("MODE: REVERSE ");
-  else if (currentState == PI_RECENTER)       btPrint("MODE: RECENTER");
 
 
   btPrint(" | L: "); btPrint(currentLeftDist); btPrint("cm");
@@ -819,9 +769,6 @@ void printTelemetry(float currentHeading) {
     btPrint("° | Current: "); btPrint(currentHeading);
     btPrint("° | Delta: "); btPrint(abs(angleDifference));
     btPrint("°");
-  } else if (currentState == PI_RECENTER) {
-    btPrint(" | Recenter: "); btPrint(recenterPhase == 0 ? "IN" : "OUT");
-    btPrint(" | Ms: "); btPrint(millis() - recenterPhaseStart);
   }
 
 
@@ -1228,9 +1175,6 @@ void loop() {
   }
   else if (currentState == WAYPOINT_ARC) {
     executeWaypointArc(currentHeading);
-  }
-  else if (currentState == PI_RECENTER) {
-    executePiRecenter();
   }
   else if (currentState == PI_REVERSE) {
     executePiReverse();
