@@ -27,7 +27,7 @@ LiDARs + IMU  ------------------------------>  ESP32  -->  motor + servo
 5. **First** corner: turn toward the side with more space (left vs right LiDAR). After that, **always that same direction**.
 6. After **12** turns, if left and right are both under 100 cm and front under 150 cm for 1 s → race stop.
 
-Bluetooth telemetry: `MODE: STRAIGHT`, then `PAUSE`, then `ARC`.
+USB serial (115200) is for the Pi only. Debug `MODE:` lines also go to USB — do not open Serial Monitor while `detect.py` has the port.
 
 ### Blocks (Pi + ESP)
 
@@ -130,7 +130,7 @@ The Pi **does not** send `RED` / `GREEN` any more. The ESP still accepts them if
 | `avcodec_send_packet` / `av.AVError` | Old PyAV script. Copy the current `detect.py` (OpenCV) over `~/Documents/Test2_Round2/detect.py` |
 | Overlay `h=` never hits 45 | Height is on the **240×240** working frame, not the 3× preview window. A box that looks ~135 px tall on screen is only ~45 px to the script |
 | Overlay says `STOP` but the car does not | Need `Serial port opened` and `>>> Sent STOP` then `>>> Sent WAYPOINT`. If you see `NO-SERIAL` / `Serial is NOT open`, the ESP never gets the command |
-| `>>> Sent STOP` but Bluetooth never shows `PI-HOLD` / `GOTO-C` | Re-flash this `.ino`. Duplicate STOP/CLEAR no longer abort the arc |
+| `>>> Sent STOP` but car never holds / GOTO-C | Re-flash this `.ino`. Duplicate STOP/CLEAR no longer abort the arc |
 | Always `CLEAR \| RED:None \| GREEN:None` | Nothing in view, or model/conf too strict. Check the preview boxes |
 | `cp210x ttyUSB0: failed set request ... -110` | Same USB stress as the camera. Separate ports; unplug/replug the ESP |
 | Serial never opens | ESP not on USB, or wrong port. Unplug/replug; `ls /dev/ttyUSB*` |
@@ -152,7 +152,6 @@ Dataset helpers (not used at race time): `capture.py` (save red/green photos), `
 | TF-Luna | `0x10` |
 | BNO055 | `0x28` |
 | USB serial from Pi | 115200 |
-| Bluetooth | name `ESP32_Robot_Telemetry` |
 
 `INVERT_STEERING` is **true**. If GOTO-C or wall arcs steer the wrong physical way, flip that or check servo direction.
 
@@ -160,7 +159,7 @@ Dataset helpers (not used at race time): `capture.py` (save red/green photos), `
 
 Arduino IDE / ESP32, libraries: Adafruit BNO055, Adafruit Unified Sensor, ESP32Servo, (WiFi/WebServer/Preferences/ESPmDNS already in the core).
 
-WiFi tuner (`RobotTuner` / `tunemybot`) is **commented out** in `setup()`. Uncomment `setupWifiTuner()` if you want the slider page at `http://192.168.4.1`. Bluetooth `NAME=VALUE` still works without WiFi (not saved to flash unless you use the web `/set`).
+WiFi tuner (`RobotTuner` / `tunemybot`) is **commented out** in `setup()`. Leave it off for the competition. There is **no Bluetooth**.
 
 ### States
 
@@ -191,8 +190,6 @@ Race finish (`ROBOT_STOPPED`) is not a Pi command; it is the 12-turn + boxed-in 
 | `WHEELBASE_CM` | 18 | Maps Pi **R** → servo. Lower = more steer for the same R |
 | `MAX_TURNS` | 12 | Then allow race stop |
 | `OBSTACLE_TIMEOUT_MS` | 5000 | Auto-clear reverse / old avoid |
-
-Bluetooth examples: `FRONT=10`, `CENTER=117`, `STRAIGHT=80`, `ARCANGLE=20`.
 
 ### How ESP uses a `WAYPOINT`
 

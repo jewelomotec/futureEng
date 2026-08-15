@@ -1,7 +1,6 @@
 #include <Wire.h>
 #include <math.h>
 #include <Adafruit_Sensor.h>
-#include "BluetoothSerial.h"
 #include <Adafruit_BNO055.h>
 #include <ESP32Servo.h>
 
@@ -38,7 +37,7 @@
 //          CONFIGURABLE VARIABLES
 // ==========================================
 int STRAIGHT_SPEED = 80;  // Cruise speed for driving straight (0-255)
-int TURN_SPEED     = 80;  // Kept for tuner/Bluetooth compatibility
+int TURN_SPEED     = 80;  // Kept for WiFi tuner compatibility
 int BACKWARD_SPEED = -80; // Speed used during the reversing arc
 
 const int RAMP_START_SPEED = 30;
@@ -141,7 +140,6 @@ Preferences prefs;
 // ==========================================
 Adafruit_BNO055 bno = Adafruit_BNO055(55, 0x28);
 Servo steeringServo;
-BluetoothSerial SerialBT;
 
 
 enum RobotState {
@@ -355,10 +353,8 @@ void checkFrontObstacle() {
 
       if (turnLeft) {
         Serial.println("!!! LAYOUT INITIALIZED: PERMANENT LEFT TURN ONLY LOCK ACTIVATED !!!");
-        SerialBT.println("!!! LAYOUT INITIALIZED: PERMANENT LEFT TURN ONLY LOCK ACTIVATED !!!");
       } else {
         Serial.println("!!! LAYOUT INITIALIZED: PERMANENT RIGHT TURN ONLY LOCK ACTIVATED !!!");
-        SerialBT.println("!!! LAYOUT INITIALIZED: PERMANENT RIGHT TURN ONLY LOCK ACTIVATED !!!");
       }
     }
 
@@ -486,7 +482,6 @@ void executeTurnMode(float currentHeading) {
   if ((minTimeReached && headingClose) || maxTimeReached) {
     if (maxTimeReached && !headingClose) {
       Serial.println("ARC: max time reached — exiting even though heading is still off");
-      SerialBT.println("ARC: max time reached — exiting even though heading is still off");
     }
     finishArcTurn();
   }
@@ -545,7 +540,6 @@ void handlePiStop() {
   steeringServo.write(SERVO_CENTER);
   finalServoAngle = SERVO_CENTER;
   Serial.println("PI: STOP — holding");
-  SerialBT.println("PI: STOP — holding");
 }
 
 void handlePiWaypoint(String line) {
@@ -611,7 +605,6 @@ void handlePiReverse() {
   waypointReady = false;
   currentState = PI_REVERSE;
   Serial.println("PI: REVERSE");
-  SerialBT.println("PI: REVERSE");
 }
 
 void handlePiClear() {
@@ -626,7 +619,6 @@ void handlePiClear() {
     }
     resumeStraightDriving();
     Serial.println("PI: CLEAR — returning to path");
-    SerialBT.println("PI: CLEAR — returning to path");
   }
 }
 
@@ -720,19 +712,17 @@ void executePiReverse() {
 
 
 // ==========================================
-//      BLUETOOTH DUAL-PRINT HELPERS
+//      USB SERIAL TELEMETRY HELPERS
 // ==========================================
 template <typename T>
 void btPrint(T msg) {
   Serial.print(msg);
-  SerialBT.print(msg);
 }
 
 
 template <typename T>
 void btPrintln(T msg) {
   Serial.println(msg);
-  SerialBT.println(msg);
 }
 
 
@@ -825,64 +815,6 @@ void saveTunables() {
   prefs.putULong("arcmin", ARC_MIN_MS);
   prefs.putULong("arcmax", ARC_MAX_MS);
   prefs.end();
-}
-
-// ==========================================
-//     BLUETOOTH TUNING COMMAND PARSER
-// ==========================================
-// Accepts lines like: TURN=150
-// Runtime-only — nothing is written to flash.
-void handleBluetoothCommands() {
-  static String btBuffer = "";
-
-  while (SerialBT.available()) {
-    char c = SerialBT.read();
-
-    if (c == '\n' || c == '\r') {
-      btBuffer.trim();
-      if (btBuffer.length() > 0) {
-        int eqIndex = btBuffer.indexOf('=');
-        if (eqIndex > 0) {
-          String name  = btBuffer.substring(0, eqIndex);
-          String value = btBuffer.substring(eqIndex + 1);
-          name.trim();
-          value.trim();
-          name.toUpperCase();
-
-          float fVal = value.toFloat();
-          bool recognized = true;
-
-          if      (name == "STRAIGHT") STRAIGHT_SPEED        = (int)fVal;
-          else if (name == "TURN")     TURN_SPEED             = (int)fVal;
-          else if (name == "BACK")     BACKWARD_SPEED         = (int)fVal;
-          else if (name == "CENTER")   { SERVO_CENTER = (int)fVal; recomputeServoLimits(); }
-          else if (name == "DIFF")     { DIFF = (int)fVal; recomputeServoLimits(); }
-          else if (name == "KP")       STEERING_KP = fVal;
-          else if (name == "KI")       STEERING_KI = fVal;
-          else if (name == "KD")       STEERING_KD = fVal;
-          else if (name == "FRONT")    FRONT_TURN_DISTANCE = (int)fVal;
-          else if (name == "ARCANGLE") ARC_SERVO_ANGLE = (int)fVal;
-          else if (name == "ARCEXIT")  ARC_EXIT_THRESHOLD = fVal;
-          else if (name == "PAUSE")    ARC_PAUSE_MS = (unsigned long)fVal;
-          else if (name == "ARCMIN")   ARC_MIN_MS = (unsigned long)fVal;
-          else if (name == "ARCMAX")   ARC_MAX_MS = (unsigned long)fVal;
-          else recognized = false;
-
-          if (recognized) {
-            SerialBT.print("OK: "); SerialBT.print(name);
-            SerialBT.print(" set to "); SerialBT.println(value);
-          } else {
-            SerialBT.print("ERR: unknown variable '"); SerialBT.print(name); SerialBT.println("'");
-          }
-        } else {
-          SerialBT.println("ERR: expected format NAME=VALUE");
-        }
-      }
-      btBuffer = "";
-    } else {
-      btBuffer += c;
-    }
-  }
 }
 
 String buildValuesJson() {
@@ -1086,12 +1018,9 @@ void setupWifiTuner() {
   IPAddress ip = WiFi.softAPIP();
   Serial.print("Tuner WiFi: "); Serial.println(AP_SSID);
   Serial.print("Tuner IP:   "); Serial.println(ip);
-  SerialBT.print("Tuner WiFi: "); SerialBT.println(AP_SSID);
-  SerialBT.print("Tuner IP:   "); SerialBT.println(ip);
 
   if (MDNS.begin("robot")) {
     Serial.println("mDNS ready — try http://robot.local");
-    SerialBT.println("mDNS ready — try http://robot.local");
   }
 
   server.on("/", handleRoot);
@@ -1107,8 +1036,6 @@ void setupWifiTuner() {
 void setup() {
   Serial.begin(115200);
   Wire.begin(21, 22);
-  SerialBT.begin("ESP32_Robot_Telemetry");
-
   pinMode(MOTOR_IN1, OUTPUT);
   pinMode(MOTOR_IN2, OUTPUT);
   pinMode(MOTOR_PWM, OUTPUT);
@@ -1122,7 +1049,6 @@ void setup() {
   selectMuxChannel(MUX_CH_BNO);
   if (!bno.begin()) {
     Serial.println("Critical Error: BNO055 missing on Multiplexer channel 4!");
-    SerialBT.println("Critical Error: BNO055 missing on Multiplexer channel 4!");
     while (1) { server.handleClient(); } // keep the tuner alive even if the BNO fails
   }
   delay(500);
@@ -1191,16 +1117,12 @@ void loop() {
     resumeStraightDriving();
     Serial.println("OBSTACLE: Timeout - Auto returning to path");
   }
-  handleBluetoothCommands();
-
   if (currentState == ROBOT_STOPPED) {
     setMotorOutput(0);
     steeringServo.write(SERVO_CENTER);
 
     Serial.print("STATUS: Finished. Total Turns Executed: ");
     Serial.println(totalTurnsCount);
-    SerialBT.print("STATUS: Finished. Total Turns Executed: ");
-    SerialBT.println(totalTurnsCount);
 
     delay(200);
     return;
