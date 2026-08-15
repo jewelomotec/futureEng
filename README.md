@@ -65,6 +65,15 @@ You should see `Camera opened: index N` and `Serial port opened: /dev/ttyUSBx`.
 
 Quit with `q` in the preview window or Ctrl+C.
 
+Pi prints and ESP serial (`MODE: GOTO-C`, `PI: STOP`, …) are appended to **`wro_detect.log`** next to `detect.py`. ESP lines are prefixed with `ESP`. With `round2`:
+
+```bash
+ls -l ~/Documents/Test2_Round2/wro_detect.log
+tail -f ~/Documents/Test2_Round2/wro_detect.log
+```
+
+Do not open Serial Monitor while the detector has `/dev/ttyUSB0`.
+
 ### Capture
 
 - OpenCV V4L2, 640×480 MJPEG, then resized to a **240×240** square for display/boxes.
