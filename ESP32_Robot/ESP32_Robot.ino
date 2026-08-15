@@ -5,8 +5,8 @@
 // Named inventory: docs/CODE_CATALOG.md
 //
 // This car: SERVO_CENTER = 106, DIFF = 45, INVERT_STEERING = true.
-// STRAIGHT_SPEED 80, FRONT_TURN_DISTANCE 20, ARC_SERVO_ANGLE 45, WHEELBASE_CM 18,
-// WAYPOINT_PAUSE_MS 400. After C: 500 ms sit, 1 s side-LiDAR recenter, then original heading.
+// STRAIGHT_SPEED 80, FRONT_TURN_DISTANCE 20, ARC_SERVO_ANGLE 45, WHEELBASE_CM 13,
+// 600 rpm N20. WAYPOINT_PAUSE_MS 400. After C: 500 ms sit, 1 s recenter, then heading.
 
 #include <Wire.h>
 #include <math.h>
@@ -117,7 +117,7 @@ unsigned long arcStartTime = 0;
 //     PI WAYPOINT (STOP / WAYPOINT / REVERSE)
 // ==========================================
 // Pi sends STOP then WAYPOINT,color,xa,ya,xc,yc,R,theta,arclen
-float WHEELBASE_CM = 18.0;                 // used to turn radius into a servo angle
+float WHEELBASE_CM = 13.0;                 // axle-to-axle cm (this bot; 600 rpm N20)
 unsigned long WAYPOINT_PAUSE_MS = 400;     // stand still after STOP before driving to C
 float WAYPOINT_EXIT_DEG = 8.0;             // IMU heading error that counts as "arrived"
 unsigned long WAYPOINT_MIN_MS = 250;
