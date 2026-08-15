@@ -212,7 +212,7 @@ If the pass is too wide, lower `WHEELBASE_CM`. Too tight: raise it, or on the Pi
 
 1. Straight: `SERVO_CENTER` so it does not drift; then PID if needed.
 2. Walls: `FRONT_TURN_DISTANCE` 15 cm, then `ARC_SERVO_ANGLE` / pause / exit.
-3. Blocks: tape `AB_DISTANCE_CM` at 45 px. Run one pillar. If the arc is sharp, `STOP_HEIGHT_PX = 30` and tape AB again. Then `AC_OFFSET_CM`.
+3. Blocks: tape `AB_DISTANCE_CM` at **30 px** (the lock height). Then `AC_OFFSET_CM`.
 4. ESP `WHEELBASE_CM` last, only if C is right but the curve is too soft/hard.
 
 ---
