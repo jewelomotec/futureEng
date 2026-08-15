@@ -43,7 +43,7 @@ USB serial (115200) is for the Pi only. Debug `MODE:` lines also go to USB — d
 5. When the block is gone for **10** frames, Pi sends `CLEAR`.
 6. Height **&gt; 80 px**: Pi sends `REVERSE` → ESP backs up at −80 until `CLEAR` or 5 s.
 
-Front LiDAR wall-turns only run in `DRIVING_STRAIGHT`. At **15 cm** they should not steal a block the camera already stopped for (~45 px is much farther). After `GOTO-C`, if you are still aimed at a wall under 15 cm, a reverse-arc can still start.
+Front LiDAR wall-turns only run in `DRIVING_STRAIGHT`. After `STOP` / `GOTO-C` the ESP ignores the front LiDAR for **`WAYPOINT_LIDAR_IGNORE_MS` (2.5 s)** so a wall behind the block does not steal the pass.
 
 ---
 
@@ -198,6 +198,7 @@ Race finish (`ROBOT_STOPPED`) is not a Pi command; it is the 12-turn + boxed-in 
 | `ARC_EXIT_THRESHOLD` | 8° | Wall arc done |
 | `ARC_MIN_MS` / `ARC_MAX_MS` | 400 / 4000 | Wall arc timing |
 | `WAYPOINT_PAUSE_MS` | **400** | Sit after Pi `STOP` before GOTO-C |
+| `WAYPOINT_LIDAR_IGNORE_MS` | **2500** | Do not start a wall reverse-arc during/after GOTO-C |
 | `WAYPOINT_EXIT_DEG` | 8° | Arrived at C |
 | `WHEELBASE_CM` | **18.0** | Maps Pi **R** → servo (round1_2026 value) |
 | `MAX_TURNS` | 12 | Then allow race stop |
