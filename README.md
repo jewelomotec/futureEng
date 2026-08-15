@@ -194,11 +194,13 @@ Race finish (`ROBOT_STOPPED`) is not a Pi command; it is the 12-turn + boxed-in 
 | `SERVO_CENTER` / `DIFF` | 117 / 25 | Center and max steer (this car: **106**) |
 | `FRONT_TURN_DISTANCE` | **15 cm** | Wall reverse-arc trigger (held 150 ms) |
 | `ARC_PAUSE_MS` | 500 | Stand still before wall reverse |
-| `ARC_SERVO_ANGLE` | 20° | How sharp the **wall** reverse is |
+| `ARC_SERVO_ANGLE` | **25°** | Wall reverse lock (steeper; was 20) |
 | `ARC_EXIT_THRESHOLD` | 8° | Wall arc done |
 | `ARC_MIN_MS` / `ARC_MAX_MS` | 400 / 4000 | Wall arc timing |
 | `WAYPOINT_PAUSE_MS` | **400** | Sit after Pi `STOP` before GOTO-C |
 | `WAYPOINT_LIDAR_IGNORE_MS` | **2500** | Do not start a wall reverse-arc during/after GOTO-C |
+| `SIDE_AVOID_CM` | **12** | During GOTO-C, if L or R closer than this, steer away from that wall |
+| `SIDE_AVOID_SERVO` | **18°** | How hard to steer away when a side LiDAR trips |
 | `WAYPOINT_EXIT_DEG` | 8° | Arrived at C |
 | `WHEELBASE_CM` | **18.0** | Maps Pi **R** → servo (round1_2026 value) |
 | `MAX_TURNS` | 12 | Then allow race stop |

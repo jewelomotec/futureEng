@@ -102,7 +102,7 @@ const unsigned long FRONT_CONFIRM_MS = 150; // debounce so one noisy reading doe
 // straight driving resumes.
 //
 // Tune these for lane width and how square the exit needs to be:
-int ARC_SERVO_ANGLE = 20;              // degrees off center — how sharp the reverse arc is
+int ARC_SERVO_ANGLE = 25;              // degrees off center — wall reverse (25 = full DIFF lock)
 float ARC_EXIT_THRESHOLD = 8.0;        // degrees — how precisely it must face the target before exiting
 unsigned long ARC_PAUSE_MS = 500;      // stand still after the 15 cm / 150 ms confirm, before reversing
 unsigned long ARC_MIN_MS = 400;        // prevent an instant exit if heading is already close
@@ -123,6 +123,8 @@ float WAYPOINT_EXIT_DEG = 8.0;             // IMU heading error that counts as "
 unsigned long WAYPOINT_MIN_MS = 250;
 unsigned long WAYPOINT_MAX_MS = 4000;
 float ESTIMATED_FWD_CMS = 30.0;            // rough cm/s at STRAIGHT_SPEED — backup timer
+int SIDE_AVOID_CM = 12;                    // during GOTO-C, steer away if L or R closer than this
+int SIDE_AVOID_SERVO = 18;                 // extra steer away from that wall (degrees off centre)
 
 bool waypointReady = false;
 float waypointStartHeading = 0.0;
@@ -544,6 +546,28 @@ int servoAngleFromRadius(float radiusCm) {
   return constrain(angle, SERVO_MAX_RIGHT, SERVO_MAX_LEFT);
 }
 
+// During GOTO-C, if a side LiDAR says we are about to scrape a wall, do not
+// keep turning into it. Left close → steer right; right close → steer left.
+int sideAvoidGotoCServo(int waypointAngle) {
+  bool leftClose  = (currentLeftDist  > 0 && currentLeftDist  < SIDE_AVOID_CM);
+  bool rightClose = (currentRightDist > 0 && currentRightDist < SIDE_AVOID_CM);
+  int away = constrain(SIDE_AVOID_SERVO, 0, DIFF);
+
+  if (leftClose && rightClose) {
+    return SERVO_CENTER;
+  }
+
+  int angle = waypointAngle;
+  if (leftClose) {
+    int avoidRight = INVERT_STEERING ? (SERVO_CENTER + away) : (SERVO_CENTER - away);
+    angle = INVERT_STEERING ? max(angle, avoidRight) : min(angle, avoidRight);
+  } else if (rightClose) {
+    int avoidLeft = INVERT_STEERING ? (SERVO_CENTER - away) : (SERVO_CENTER + away);
+    angle = INVERT_STEERING ? min(angle, avoidLeft) : max(angle, avoidLeft);
+  }
+  return constrain(angle, SERVO_MAX_RIGHT, SERVO_MAX_LEFT);
+}
+
 void handlePiStop() {
   lastPiCmd = millis();
   ignoreFrontLidarFor(WAYPOINT_LIDAR_IGNORE_MS);
@@ -684,8 +708,9 @@ void executePiHold() {
 
 void executeWaypointArc(float currentHeading) {
   setMotorOutput(STRAIGHT_SPEED);
-  steeringServo.write(waypointServoAngle);
-  finalServoAngle = waypointServoAngle;
+  int steer = sideAvoidGotoCServo(waypointServoAngle);
+  steeringServo.write(steer);
+  finalServoAngle = steer;
 
   angleDifference = shortestAngleDiff(currentHeading, waypointTargetHeading);
   unsigned long elapsed = millis() - waypointArcStart;
