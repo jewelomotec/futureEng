@@ -11,6 +11,8 @@ lines (hold, then forward arc to C).
 """
 
 import math
+import os
+import sys
 import time
 import threading
 import queue
@@ -43,6 +45,7 @@ CAMERA_HEIGHT = 480
 CAMERA_FPS = 15                  # 30 fps on Pi USB3 often overruns xHCI (dmesg buffer overrun)
 SERIAL_PORTS = ("/dev/ttyUSB0", "/dev/ttyUSB1", "/dev/ttyAMA0")
 SERIAL_BAUD = 115200
+LOG_NAME = "wro_detect.log"     # Pi prints + ESP serial, next to this script
 
 # How many recent frames must see the same colour before we trust it.
 VOTE_HISTORY = 7
@@ -373,13 +376,74 @@ def set_manual_camera_controls(camera_id: int, exposure_value: int, wb_temperatu
             print(f"Warning: could not run {' '.join(cmd)} ({e})")
     print(f"Camera controls locked: exposure={exposure_value}, wb_temp={wb_temperature}")
 
+class _Tee:
+    """Copy stdout/stderr to a log file with timestamps."""
+
+    def __init__(self, stream, log_file):
+        self.stream = stream
+        self.log_file = log_file
+        self._buf = ""
+
+    def write(self, data):
+        self.stream.write(data)
+        self.stream.flush()
+        self._buf += data
+        while "\n" in self._buf:
+            line, self._buf = self._buf.split("\n", 1)
+            ts = time.strftime("%H:%M:%S")
+            self.log_file.write(f"{ts} {line}\n")
+            self.log_file.flush()
+
+    def flush(self):
+        self.stream.flush()
+        self.log_file.flush()
+
+
+def setup_run_log():
+    here = os.path.dirname(os.path.abspath(__file__)) or "."
+    path = os.path.join(here, LOG_NAME)
+    log_file = open(path, "a", encoding="utf-8", buffering=1)
+    log_file.write(f"\n===== start {time.strftime('%Y-%m-%d %H:%M:%S')} =====\n")
+    log_file.flush()
+    sys.stdout = _Tee(sys.stdout, log_file)
+    sys.stderr = _Tee(sys.stderr, log_file)
+    print(f"Log file: {path}", flush=True)
+    return path, log_file
+
+
+def start_esp_log_thread(ser, stop_flag):
+    """Read ESP telemetry (MODE: GOTO-C, PI: STOP, …) into the same log."""
+
+    def loop():
+        buf = ""
+        while not stop_flag.is_set():
+            try:
+                n = ser.in_waiting
+                if not n:
+                    time.sleep(0.02)
+                    continue
+                buf += ser.read(n).decode("ascii", errors="replace")
+                while "\n" in buf:
+                    line, buf = buf.split("\n", 1)
+                    line = line.strip("\r")
+                    if line:
+                        print(f"ESP {line}", flush=True)
+            except Exception:
+                break
+
+    t = threading.Thread(target=loop, daemon=True)
+    t.start()
+    return t
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def main(camera_id: int = CAMERA_ID, frame_size: int = FRAME_SIZE):
+    log_path, log_file = setup_run_log()
     set_manual_camera_controls(camera_id, CAMERA_EXPOSURE, CAMERA_WB_TEMP)
 
     ser = None
+    esp_log_thread = None
     try:
         import serial
         last_err = None
@@ -393,6 +457,11 @@ def main(camera_id: int = CAMERA_ID, frame_size: int = FRAME_SIZE):
                 ser = None
         if ser is None:
             print(f"Could not open serial port: {last_err}")
+        else:
+            try:
+                ser.reset_input_buffer()
+            except Exception:
+                pass
     except Exception as e:
         print(f"Could not open serial port: {e}")
         ser = None
@@ -400,6 +469,8 @@ def main(camera_id: int = CAMERA_ID, frame_size: int = FRAME_SIZE):
     session, input_name, _ = load_onnx_session(ONNX_MODEL_PATH)
 
     t, frame_q, stop_flag, cam = start_capture_thread(camera_id, frame_size)
+    if ser is not None:
+        esp_log_thread = start_esp_log_thread(ser, stop_flag)
 
     def get_frame(timeout=1.0):
         try:
@@ -604,6 +675,12 @@ def main(camera_id: int = CAMERA_ID, frame_size: int = FRAME_SIZE):
                 pass
         if ser is not None:
             ser.close()
+        if log_file is not None:
+            try:
+                log_file.write(f"===== stop {time.strftime('%Y-%m-%d %H:%M:%S')} =====\n")
+                log_file.close()
+            except Exception:
+                pass
         cv2.destroyAllWindows()
 
 if __name__ == "__main__":
