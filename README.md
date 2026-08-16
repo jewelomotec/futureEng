@@ -200,8 +200,8 @@ Race finish (`ROBOT_STOPPED`) is not a Pi command; it is the 12-turn + boxed-in 
 | `WAYPOINT_PAUSE_MS` | **400** | Sit after Pi `STOP` before GOTO-C |
 | `WAYPOINT_LIDAR_IGNORE_MS` | **2500** | Do not start a wall reverse-arc during/after GOTO-C |
 | `SIDE_AVOID_CM` | **12** | During GOTO-C, if L or R closer than this, steer away from that wall |
-| `AFTER_C_PAUSE_MS` | **500** | Sit after arriving at C, then pass-side steer |
-| `RECENTER_SERVO` | **22°** | After C: red → right, green → left (not L−R of the wide lane) |
+| `AFTER_C_PAUSE_MS` | **500** | Sit after arriving at C, then steer back to mid-lane |
+| `RECENTER_SERVO` | **22°** | After C: red → **left**, green → **right** (opposite the pass) |
 | `RECENTER_MAX_MS` | **1500** | Then original heading hold |
 | `WAYPOINT_EXIT_DEG` | 12° | Arrived at C (looser than 8 → lock ends earlier) |
 | `WHEELBASE_CM` | **13.0** | This bot axle-to-axle (cm). Maps Pi **R** → servo. 600 rpm N20 |

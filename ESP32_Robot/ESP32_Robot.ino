@@ -128,7 +128,7 @@ int SIDE_AVOID_SERVO = 28;                 // extra steer away from that wall (d
 unsigned long AFTER_C_PAUSE_MS = 500;      // sit after C (raise locally to watch C; next step is still MIDPATH)
 unsigned long RECENTER_MAX_MS = 1500;      // then drive toward the pass side (red right / green left)
 int RECENTER_BALANCE_CM = 10;              // unused for post-C; L-R is the outer lane, not the 40 cm gap
-int RECENTER_SERVO = 22;                   // steer toward the pass colour
+int RECENTER_SERVO = 22;                   // after C: opposite the pass (red→left, green→right) back to mid-lane
 unsigned long afterCPhaseStart = 0;
 
 bool waypointReady = false;
@@ -138,7 +138,7 @@ float waypointRadiusCm = 0.0;
 float waypointThetaDeg = 0.0;
 float waypointArcLenCm = 0.0;
 int waypointServoAngle = 90;
-bool waypointPassRight = true;             // red → right, green → left; used after C
+bool waypointPassRight = true;             // red passed on the right; MIDPATH then steers the other way
 unsigned long piHoldStart = 0;
 unsigned long waypointArcStart = 0;
 unsigned long lastPiCmd = 0;
@@ -595,14 +595,14 @@ int steerTowardLaneMiddle() {
   return constrain(angle, SERVO_MAX_RIGHT, SERVO_MAX_LEFT);
 }
 
-// After C the side LiDARs still see the wide section walls, not the 40 cm
-// block-to-wall gap — so L-R "middle" does nothing. Steer by pass colour
-// instead, unless that wall is already closer than SIDE_AVOID_CM.
+// After a red pass the bot is already on the right of the path → steer LEFT
+// toward mid-lane. Green pass → already left → steer RIGHT. Do not keep
+// turning into the wall we are heading toward.
 int steerTowardPassSide() {
   int offset = constrain(RECENTER_SERVO, 0, DIFF);
-  bool steerRight = waypointPassRight;
-  int passDist = steerRight ? currentRightDist : currentLeftDist;
-  if (passDist > 0 && passDist < SIDE_AVOID_CM) {
+  bool steerRight = !waypointPassRight;
+  int towardDist = steerRight ? currentRightDist : currentLeftDist;
+  if (towardDist > 0 && towardDist < SIDE_AVOID_CM) {
     return SERVO_CENTER;
   }
   int angle;
@@ -623,7 +623,7 @@ void beginAfterCPause() {
   afterCPhaseStart = millis();
   currentState = PI_AFTER_C_PAUSE;
   ignoreFrontLidarFor(AFTER_C_PAUSE_MS + RECENTER_MAX_MS + WAYPOINT_LIDAR_IGNORE_MS);
-  Serial.println("PI: arrived at C — pause then steer to pass side");
+  Serial.println("PI: arrived at C — pause then steer back to mid-lane");
 }
 
 void handlePiStop() {
@@ -702,7 +702,8 @@ void handlePiWaypoint(String line) {
   Serial.print(" theta=");
   Serial.print(waypointThetaDeg);
   Serial.print(" servo=");
-  Serial.println(waypointServoAngle);
+  Serial.print(waypointServoAngle);
+  Serial.println(waypointPassRight ? " pass=right" : " pass=left");
 }
 
 void handlePiReverse() {
@@ -821,8 +822,8 @@ void executeAfterCPause() {
     currentState = PI_RECENTER;
     rampArmedForThisPhase = false;
     Serial.println(waypointPassRight
-                      ? "PI: MIDPATH — steer toward pass (red/right)"
-                      : "PI: MIDPATH — steer toward pass (green/left)");
+                      ? "PI: MIDPATH — red pass, steer left to middle"
+                      : "PI: MIDPATH — green pass, steer right to middle");
   }
 }
 
@@ -834,7 +835,7 @@ void executePiRecenter() {
 
   if ((millis() - afterCPhaseStart) >= RECENTER_MAX_MS) {
     resumeStraightDriving();
-    Serial.println("PI: pass-side steer done — holding original heading");
+    Serial.println("PI: mid-lane steer done — holding original heading");
   }
 }
 
