@@ -125,10 +125,10 @@ unsigned long WAYPOINT_MAX_MS = 4000;
 float ESTIMATED_FWD_CMS = 30.0;            // rough cm/s at STRAIGHT_SPEED — backup timer
 int SIDE_AVOID_CM = 12;                    // during GOTO-C, steer away if L or R closer than this
 int SIDE_AVOID_SERVO = 28;                 // extra steer away from that wall (degrees off centre)
-unsigned long AFTER_C_PAUSE_MS = 500;      // sit after arriving at C, then recenter
-unsigned long RECENTER_MAX_MS = 1000;      // then always return to original heading hold
-int RECENTER_BALANCE_CM = 10;              // |L-R| below this = middle of the lane
-int RECENTER_SERVO = 22;                   // steer toward the side with more space
+unsigned long AFTER_C_PAUSE_MS = 500;      // sit after C (raise locally to watch C; next step is still MIDPATH)
+unsigned long RECENTER_MAX_MS = 1500;      // then drive toward the pass side (red right / green left)
+int RECENTER_BALANCE_CM = 10;              // unused for post-C; L-R is the outer lane, not the 40 cm gap
+int RECENTER_SERVO = 22;                   // steer toward the pass colour
 unsigned long afterCPhaseStart = 0;
 
 bool waypointReady = false;
@@ -138,6 +138,7 @@ float waypointRadiusCm = 0.0;
 float waypointThetaDeg = 0.0;
 float waypointArcLenCm = 0.0;
 int waypointServoAngle = 90;
+bool waypointPassRight = true;             // red → right, green → left; used after C
 unsigned long piHoldStart = 0;
 unsigned long waypointArcStart = 0;
 unsigned long lastPiCmd = 0;
@@ -594,6 +595,25 @@ int steerTowardLaneMiddle() {
   return constrain(angle, SERVO_MAX_RIGHT, SERVO_MAX_LEFT);
 }
 
+// After C the side LiDARs still see the wide section walls, not the 40 cm
+// block-to-wall gap — so L-R "middle" does nothing. Steer by pass colour
+// instead, unless that wall is already closer than SIDE_AVOID_CM.
+int steerTowardPassSide() {
+  int offset = constrain(RECENTER_SERVO, 0, DIFF);
+  bool steerRight = waypointPassRight;
+  int passDist = steerRight ? currentRightDist : currentLeftDist;
+  if (passDist > 0 && passDist < SIDE_AVOID_CM) {
+    return SERVO_CENTER;
+  }
+  int angle;
+  if (INVERT_STEERING) {
+    angle = steerRight ? (SERVO_CENTER + offset) : (SERVO_CENTER - offset);
+  } else {
+    angle = steerRight ? (SERVO_CENTER - offset) : (SERVO_CENTER + offset);
+  }
+  return constrain(angle, SERVO_MAX_RIGHT, SERVO_MAX_LEFT);
+}
+
 bool inPostCManeuver() {
   return currentState == PI_AFTER_C_PAUSE || currentState == PI_RECENTER;
 }
@@ -603,7 +623,7 @@ void beginAfterCPause() {
   afterCPhaseStart = millis();
   currentState = PI_AFTER_C_PAUSE;
   ignoreFrontLidarFor(AFTER_C_PAUSE_MS + RECENTER_MAX_MS + WAYPOINT_LIDAR_IGNORE_MS);
-  Serial.println("PI: arrived at C — pause then recenter to lane middle");
+  Serial.println("PI: arrived at C — pause then steer to pass side");
 }
 
 void handlePiStop() {
@@ -670,6 +690,12 @@ void handlePiWaypoint(String line) {
   waypointTargetHeading = wrapHeading(waypointStartHeading + waypointThetaDeg);
   waypointServoAngle = servoAngleFromRadius(waypointRadiusCm);
   waypointReady = true;
+  {
+    String col = parts[1];
+    col.trim();
+    col.toLowerCase();
+    waypointPassRight = (col == "red");
+  }
 
   Serial.print("PI: WAYPOINT R=");
   Serial.print(waypointRadiusCm);
@@ -794,19 +820,21 @@ void executeAfterCPause() {
     afterCPhaseStart = millis();
     currentState = PI_RECENTER;
     rampArmedForThisPhase = false;
-    Serial.println("PI: recentering to lane middle");
+    Serial.println(waypointPassRight
+                      ? "PI: MIDPATH — steer toward pass (red/right)"
+                      : "PI: MIDPATH — steer toward pass (green/left)");
   }
 }
 
 void executePiRecenter() {
   setMotorOutput(STRAIGHT_SPEED);
-  int steer = steerTowardLaneMiddle();
+  int steer = steerTowardPassSide();
   steeringServo.write(steer);
   finalServoAngle = steer;
 
   if ((millis() - afterCPhaseStart) >= RECENTER_MAX_MS) {
     resumeStraightDriving();
-    Serial.println("PI: recenter 1 s done — holding original heading");
+    Serial.println("PI: pass-side steer done — holding original heading");
   }
 }
 
