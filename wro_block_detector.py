@@ -1,17 +1,11 @@
 #!/usr/bin/env python3
 # ASCII-only file so a Pi paste does not turn dashes into garbage.
 """
-Block detector - detect.py (canonical race Python in this repo).
+Block detector (GitHub name) - wro_block_detector.py
 
-Official name: Block detector.
-Same source as wro_block_detector.py. On the Pi, paste into round2.py and
-start with systemd unit round2 (deploy/round2.service).
-
-Runs on the Raspberry Pi: Lenovo webcam + best_ncnn.onnx, votes 5/7 frames,
-freezes A/B/C at STOP_HEIGHT_PX, sends STOP then WAYPOINT (also REVERSE/CLEAR)
-at 115200 to ESP32_Robot.ino. Logs to wro_detect.log.
-
-Does not steer or read LiDAR. Named inventory: docs/CODE_CATALOG.md
+Official name: Block detector, GitHub filename.
+Identical to detect.py. Use either file as the source to paste into round2.py
+on the Pi. Named inventory: docs/CODE_CATALOG.md
 """
 
 import math

@@ -36,7 +36,7 @@ USB serial (115200) is for the Pi only. Debug `MODE:` lines print about 5 times/
 
 1. Pi must see the same colour in **5 of the last 7** frames (`CONF_THRESHOLD` 0.55).
 2. Box height **≥ 30 px** for **2 frames** (median of last 5 hits, not a one-frame spike):
-   - Robot pose = **B**, block = **A**, pass point **C** = A shifted **10 cm** sideways (red → right, green → left).
+   - Robot pose = **B**, block = **A**, pass point **C** = A shifted **12 cm** sideways (red right, green left).
    - Pi sends `STOP,...` then `WAYPOINT,...`.
 3. ESP sits **400 ms**, then drives **forward** to C (`MODE: GOTO-C`) with servo from radius **R**. Exit after **~3/4 of the arc time** if heading is within **12°**, or after the full `arc_len / 30 cm/s` time (4 s cap). Do not quit at 12° after only 250 ms.
 4. Then PID on the **heading from before the stop**. No S-curve. Extra `STOP` can restart the hold; `CLEAR` can abort an arc still running.
