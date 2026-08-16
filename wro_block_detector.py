@@ -62,11 +62,12 @@ WAYPOINT_RESEND_WINDOW_S = 1.2  # then stop; ESP ignores extras after GOTO-C unt
 # run, drop this to 30 so the bot stops farther away and the arc is gentler.
 STOP_HEIGHT_PX = 30  # freeze A/B/C and send WAYPOINT at this box height
 
-# AC: robot CENTER beside the block (red +X, green -X).
-# Pass gap block→wall is 40 cm; bot is 25 cm wide (12.5 cm half).
-# C is the centerline: 12 clips the pillar, 25 leaves only ~2.5 cm to the wall.
-# 20 cm = middle of the 40 cm path (~7.5 cm clearance each side).
-AC_OFFSET_CM = 20.0
+# AC: nudge of robot CENTER toward the pass side (red +X, green -X).
+# Field: 10 cm worked. C finishes *before* the block (heading exit), not
+# beside it. 20 cm was "middle of the 40 cm gap when level with the pillar"
+# and is the wrong model if GOTO-C ends early. Mid-path after the arc is
+# the 1 s L/R recenter, not a large AC.
+AC_OFFSET_CM = 10.0
 
 # AB: forward distance (cm) from robot to block when height is STOP_HEIGHT_PX.
 # Tape this at the SAME height you use above. If you change 45 → 30, measure AB

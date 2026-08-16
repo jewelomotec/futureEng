@@ -36,7 +36,7 @@ USB serial (115200) is for the Pi only. Debug `MODE:` lines also go to USB — d
 
 1. Pi must see the same colour in **5 of the last 7** frames (`CONF_THRESHOLD` 0.55).
 2. Box height **≥ 45 px** (try **30** if the pass is too sharp):
-   - Robot pose = **B**, block = **A**, pass point **C** = A shifted **20 cm** sideways (red → right, green → left). Middle of the 40 cm block–wall gap; bot is 25 cm wide.
+   - Robot pose = **B**, block = **A**, pass point **C** = A shifted **10 cm** sideways (red → right, green → left). Field-tested; GOTO-C often finishes *before* the block. Mid-path in the 40 cm gap is the post-C recenter, not a large AC.
    - Pi sends `STOP,...` then `WAYPOINT,...`.
 3. ESP sits **400 ms**, then drives **forward** to C (`MODE: GOTO-C`) with servo from radius **R**. IMU exits when heading is within **12°** of (heading at stop + theta).
 4. Then PID on the **heading from before the stop**. No S-curve. Extra `STOP` can restart the hold; `CLEAR` can abort an arc still running.
@@ -92,7 +92,7 @@ Robot frame at the freeze: **B = (0, 0)**, **+X right**, **+Y forward**.
 |---|---|---|
 | `STOP_HEIGHT_PX` | 30 | Freeze A,B,C and send WAYPOINT |
 | `AB_DISTANCE_CM` | 40 | Tape **forward** distance to the pillar **at that same pixel height** |
-| `AC_OFFSET_CM` | 20 | Robot **center** beside the block. 40 cm block–wall gap, 25 cm bot → middle of the path |
+| `AC_OFFSET_CM` | 10 | Pass-side nudge of robot center (field: 10 worked). Not “sit 20 cm beside the pillar” |
 | `REAL_BLOCK_HEIGHT_CM` | 10 | Real pillar height (cm), for left/right position |
 | `REVERSE_HEIGHT_PX` | 80 | Too close → `REVERSE` |
 | `CONF_THRESHOLD` | 0.55 | ONNX score gate |
