@@ -69,7 +69,8 @@ WAYPOINT_RESEND_WINDOW_S = 1.2  # then stop; ESP ignores extras after GOTO-C unt
 STOP_HEIGHT_PX = 30  # freeze A/B/C and send WAYPOINT at this box height
 
 # AC: how far beside the block to pass. Red → +X (robot's right), green → -X.
-AC_OFFSET_CM = 25.0
+# 25 put C through the pass-side wall; 12 keeps the pass closer to the pillar.
+AC_OFFSET_CM = 12.0
 
 # AB: forward distance (cm) from robot to block when height is STOP_HEIGHT_PX.
 # Tape this at the SAME height you use above. If you change 45 → 30, measure AB

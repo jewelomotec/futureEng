@@ -119,7 +119,7 @@ unsigned long arcStartTime = 0;
 // Pi sends STOP then WAYPOINT,color,xa,ya,xc,yc,R,theta,arclen
 float WHEELBASE_CM = 13.0;                 // axle-to-axle cm (this bot; 600 rpm N20)
 unsigned long WAYPOINT_PAUSE_MS = 400;     // stand still after STOP before driving to C
-float WAYPOINT_EXIT_DEG = 8.0;             // IMU heading error that counts as "arrived"
+float WAYPOINT_EXIT_DEG = 12.0;            // IMU heading error that counts as "arrived" (ends GOTO-C sooner than 8)
 unsigned long WAYPOINT_MIN_MS = 250;
 unsigned long WAYPOINT_MAX_MS = 4000;
 float ESTIMATED_FWD_CMS = 30.0;            // rough cm/s at STRAIGHT_SPEED — backup timer

@@ -36,9 +36,9 @@ USB serial (115200) is for the Pi only. Debug `MODE:` lines also go to USB — d
 
 1. Pi must see the same colour in **5 of the last 7** frames (`CONF_THRESHOLD` 0.55).
 2. Box height **≥ 45 px** (try **30** if the pass is too sharp):
-   - Robot pose = **B**, block = **A**, pass point **C** = A shifted **25 cm** sideways (red → right, green → left).
+   - Robot pose = **B**, block = **A**, pass point **C** = A shifted **12 cm** sideways (red → right, green → left).
    - Pi sends `STOP,...` then `WAYPOINT,...`.
-3. ESP sits **400 ms**, then drives **forward** to C (`MODE: GOTO-C`) with servo from radius **R**. IMU exits when heading is within **8°** of (heading at stop + theta).
+3. ESP sits **400 ms**, then drives **forward** to C (`MODE: GOTO-C`) with servo from radius **R**. IMU exits when heading is within **12°** of (heading at stop + theta).
 4. Then PID on the **heading from before the stop**. No S-curve. Extra `STOP` can restart the hold; `CLEAR` can abort an arc still running.
 5. When the block is gone for **10** frames, Pi sends `CLEAR`.
 6. Height **&gt; 80 px**: Pi sends `REVERSE` → ESP backs up at −80 until `CLEAR` or 5 s.
@@ -92,7 +92,7 @@ Robot frame at the freeze: **B = (0, 0)**, **+X right**, **+Y forward**.
 |---|---|---|
 | `STOP_HEIGHT_PX` | 30 | Freeze A,B,C and send WAYPOINT |
 | `AB_DISTANCE_CM` | 40 | Tape **forward** distance to the pillar **at that same pixel height** |
-| `AC_OFFSET_CM` | 25 | How far beside the block to pass |
+| `AC_OFFSET_CM` | 12 | How far beside the block to pass |
 | `REAL_BLOCK_HEIGHT_CM` | 10 | Real pillar height (cm), for left/right position |
 | `REVERSE_HEIGHT_PX` | 80 | Too close → `REVERSE` |
 | `CONF_THRESHOLD` | 0.55 | ONNX score gate |
@@ -204,7 +204,7 @@ Race finish (`ROBOT_STOPPED`) is not a Pi command; it is the 12-turn + boxed-in 
 | `RECENTER_BALANCE_CM` | **10** | |L−R| that counts as lane middle |
 | `RECENTER_SERVO` | **22°** | Steer toward the side with more space |
 | `RECENTER_MAX_MS` | **1000** | Then always original heading hold |
-| `WAYPOINT_EXIT_DEG` | 8° | Arrived at C |
+| `WAYPOINT_EXIT_DEG` | 12° | Arrived at C (looser than 8 → lock ends earlier) |
 | `WHEELBASE_CM` | **13.0** | This bot axle-to-axle (cm). Maps Pi **R** → servo. 600 rpm N20 |
 | `MAX_TURNS` | 12 | Then allow race stop |
 | `OBSTACLE_TIMEOUT_MS` | 5000 | Auto-clear reverse / old avoid |
