@@ -83,10 +83,8 @@ float ESTIMATED_FWD_CMS = 30.0;
 int SIDE_AVOID_CM = 12;
 int SIDE_AVOID_SERVO = 28;
 unsigned long AFTER_C_PAUSE_MS = 5000;   // sit after C so you can inspect, then 2nd manoeuvre
-unsigned long REJOIN_MS = 700;           // green: shorter pull (harder steer, less track used)
-int REJOIN_SERVO = 40;                   // strong right pull toward original middle
 int MIDPATH_SPEED = 50;                  // slower than cruise so the slide-in uses less distance
-unsigned long RECENTER_MAX_MS = 1600;    // red L/R mid-path — don't roll as far
+unsigned long RECENTER_MAX_MS = 1600;    // red and green mid-path — don't roll as far
 int RECENTER_BALANCE_CM = 8;
 int RECENTER_SERVO = 40;                 // sharper steer toward the middle
 unsigned long RECENTER_HOLD_MS = 120;    // leave as soon as L/R are balanced
@@ -480,17 +478,28 @@ int sideAvoidGotoCServo(int waypointAngle) {
 }
 
 int steerTowardLaneMiddle() {
-  if (currentLeftDist <= 0 || currentRightDist <= 0) {
-    return SERVO_CENTER;
+  int offset = constrain(RECENTER_SERVO, 16, DIFF);
+  bool steerRight;
+
+  bool valid = (currentLeftDist > 0 && currentRightDist > 0);
+  int gap = valid ? (currentLeftDist - currentRightDist) : 0;
+  if (valid) {
+    if (abs(gap) <= RECENTER_BALANCE_CM) {
+      return SERVO_CENTER;
+    }
+    offset = constrain(abs(gap), 16, RECENTER_SERVO);
+    offset = constrain(offset, 0, DIFF);
   }
-  int gap = currentLeftDist - currentRightDist;
-  if (abs(gap) <= RECENTER_BALANCE_CM) {
-    return SERVO_CENTER;
+
+  // Red passed on the right → original middle is left → follow L/R (usually left).
+  // Green passed on the left → original middle is right → opposite of red.
+  if (waypointPassRight) {
+    if (!valid) return SERVO_CENTER;
+    steerRight = (gap < 0);
+  } else {
+    steerRight = true;
   }
-  // Use the full gap (not gap/2) so the car cuts back to centre in fewer cm.
-  int offset = constrain(abs(gap), 16, RECENTER_SERVO);
-  offset = constrain(offset, 0, DIFF);
-  bool steerRight = (gap < 0);
+
   int angle;
   if (INVERT_STEERING) {
     angle = steerRight ? (SERVO_CENTER + offset) : (SERVO_CENTER - offset);
@@ -504,11 +513,11 @@ void beginAfterCPause() {
   straightTargetHeading = pathHeadingCaptured ? pathHeadingBeforeBlock : waypointStartHeading;
   afterCPhaseStart = millis();
   currentState = PI_AFTER_C_PAUSE;
-  blockPassUntil = millis() + AFTER_C_PAUSE_MS + REJOIN_MS + BLOCK_PASS_IGNORE_MS;
-  ignoreFrontLidarFor(AFTER_C_PAUSE_MS + REJOIN_MS + RECENTER_MAX_MS + WAYPOINT_LIDAR_IGNORE_MS);
+  blockPassUntil = millis() + AFTER_C_PAUSE_MS + RECENTER_MAX_MS + BLOCK_PASS_IGNORE_MS;
+  ignoreFrontLidarFor(AFTER_C_PAUSE_MS + RECENTER_MAX_MS + WAYPOINT_LIDAR_IGNORE_MS);
   Serial.println(waypointPassRight
-                   ? "PI: arrived at C — pause then red MIDPATH"
-                   : "PI: arrived at C — pause then green pull RIGHT to middle");
+                   ? "PI: arrived at C — pause then red MIDPATH (toward left/centre)"
+                   : "PI: arrived at C — pause then green MIDPATH (toward right/centre)");
 }
 
 void handlePiStop() {
@@ -719,41 +728,15 @@ void executeAfterCPause() {
     lastHeadingError = 0.0;
     lastHeadingTime = millis();
     integralError = 0.0;
-    if (waypointPassRight) {
-      Serial.print("PI: MIDPATH red  L=");
-      Serial.print(currentLeftDist);
-      Serial.print(" R=");
-      Serial.println(currentRightDist);
-    } else {
-      Serial.println("PI: REJOIN green — steer RIGHT toward original middle");
-    }
+    Serial.print(waypointPassRight ? "PI: MIDPATH red  L=" : "PI: MIDPATH green (right)  L=");
+    Serial.print(currentLeftDist);
+    Serial.print(" R=");
+    Serial.println(currentRightDist);
   }
 }
 
 void executePiRecenter(float currentHeading) {
-  // Green passed on the left: original middle is to the RIGHT. Do not use L/R
-  // LiDAR here — that was steering left again.
-  if (!waypointPassRight) {
-    straightTargetHeading = pathHeadingCaptured ? pathHeadingBeforeBlock : waypointStartHeading;
-    driveStraightMode(currentHeading);
-    setMotorOutput(MIDPATH_SPEED);
-    int towardMiddle = servoWithOffset(true, REJOIN_SERVO);
-    if (INVERT_STEERING) {
-      finalServoAngle = max(finalServoAngle, towardMiddle);
-    } else {
-      finalServoAngle = min(finalServoAngle, towardMiddle);
-    }
-    finalServoAngle = constrain(finalServoAngle, SERVO_MAX_RIGHT, SERVO_MAX_LEFT);
-    steeringServo.write(finalServoAngle);
-
-    unsigned long elapsed = millis() - afterCPhaseStart;
-    if (elapsed >= REJOIN_MS) {
-      resumeStraightDriving();
-      Serial.println("PI: green RIGHT rejoin done — STRAIGHT on pre-block heading");
-    }
-    return;
-  }
-
+  (void)currentHeading;
   setMotorOutput(MIDPATH_SPEED);
   int steer = steerTowardLaneMiddle();
   steeringServo.write(steer);
@@ -776,7 +759,7 @@ void executePiRecenter(float currentHeading) {
     Serial.print(currentLeftDist);
     Serial.print(" R=");
     Serial.print(currentRightDist);
-    Serial.println(" — holding pre-block heading");
+    Serial.println(waypointPassRight ? " — red (left/centre)" : " — green (right/centre)");
   }
 }
 
@@ -810,10 +793,7 @@ void printTelemetry(float currentHeading) {
   else if (currentState == PI_HOLD)           btPrint("MODE: PI-HOLD ");
   else if (currentState == WAYPOINT_ARC)      btPrint("MODE: GOTO-C  ");
   else if (currentState == PI_AFTER_C_PAUSE)  btPrint("MODE: C-PAUSE ");
-  else if (currentState == PI_RECENTER) {
-    if (waypointPassRight) btPrint("MODE: MIDPATH ");
-    else                   btPrint("MODE: REJOIN  ");
-  }
+  else if (currentState == PI_RECENTER)         btPrint("MODE: MIDPATH ");
   else if (currentState == PI_REVERSE)        btPrint("MODE: REVERSE ");
 
   btPrint(" | L: "); btPrint(currentLeftDist); btPrint("cm");
