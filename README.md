@@ -35,8 +35,8 @@ Bluetooth telemetry: `MODE: STRAIGHT`, then `PAUSE`, then `ARC`.
 2. Box height **≥ 45 px** (try **30** if the pass is too sharp):
    - Robot pose = **B**, block = **A**, pass point **C** = A shifted **25 cm** sideways (red → right, green → left).
    - Pi sends `STOP,...` then `WAYPOINT,...`.
-3. ESP: motors off ~**400 ms** (`MODE: PI-HOLD`), then drives **forward** to C (`MODE: GOTO-C`) with servo set from radius **R**. IMU exits when heading is within **8°** of (heading at stop + theta).
-4. Then PID holds the **heading from before the stop** (same lane).
+3. ESP: motors off ~**400 ms** (`MODE: PI-HOLD`), then drives **forward** to C (`MODE: GOTO-C`). Servo is `atan(wheelbase/|R|)` plus a heading correction so the IMU tracks the planned arc. The Pi **keeps sending an updated remaining B→C** while the block is in view. Arrival is when the remaining arc is short **or** ~92% of the planned distance has been driven **and** heading is within **5°** — not heading-alone (that used to stop short of C). Speed eases to PWM **55** near the end.
+4. Then PID holds the **heading at C** (the arc exit), not the pre-stop heading.
 5. When the block is gone for **10** frames, Pi sends `CLEAR`.
 6. Height **&gt; 80 px**: Pi sends `REVERSE` → ESP backs up at −80 until `CLEAR` or 5 s.
 
@@ -187,7 +187,9 @@ Race finish (`ROBOT_STOPPED`) is not a Pi command; it is the 12-turn + boxed-in 
 | `ARC_EXIT_THRESHOLD` | 8° | Wall arc done |
 | `ARC_MIN_MS` / `ARC_MAX_MS` | 400 / 4000 | Wall arc timing |
 | `WAYPOINT_PAUSE_MS` | 400 | Stand still after Pi `STOP` |
-| `WAYPOINT_EXIT_DEG` | 8° | Arrived at C |
+| `WAYPOINT_EXIT_DEG` | 5 | Arrived at C (only after the arc length is done) |
+| `GOTO_HEADING_KP` | 0.9 | Extra steer while tracking the planned heading |
+| `ESTIMATED_FWD_CMS` | 30 | Tape this at PWM 80 — GOTO-C distance is time × this |
 | `WHEELBASE_CM` | 18 | Maps Pi **R** → servo. Lower = more steer for the same R |
 | `MAX_TURNS` | 12 | Then allow race stop |
 | `OBSTACLE_TIMEOUT_MS` | 5000 | Auto-clear reverse / old avoid |
@@ -196,13 +198,14 @@ Bluetooth examples: `FRONT=10`, `CENTER=117`, `STRAIGHT=80`, `ARCANGLE=20`.
 
 ### How ESP uses a `WAYPOINT`
 
-1. Parse `R`, `theta`, `arc_len`.
+1. Parse `R`, `theta`, `arc_len`, and C `(xc,yc)`.
 2. Target heading = heading at `STOP` **+ theta** (BNO heading increases on a right turn).
-3. Servo from `atan(WHEELBASE_CM / |R|)`, clamped to `DIFF`, inverted if `INVERT_STEERING`.
-4. Drive forward at 80 until heading is close, or `WAYPOINT_MAX_MS` (4 s).
-5. Center wheels; `straightTargetHeading` = heading from before the stop.
+3. Servo from `atan(WHEELBASE_CM / |R|)`, plus IMU correction so heading follows the arc as distance is covered.
+4. While GOTO-C is running, a new `WAYPOINT` **retargets** R/theta/C (live camera remaining path). It does not restart the 4 s timeout.
+5. Drive forward, slowing near the end, until remaining length is small, or ~92% of the planned arc is done and heading is within 5°, or 4 s.
+6. Center wheels; `straightTargetHeading` = heading at C.
 
-The Pi re-sends `WAYPOINT` while the block stays locked (USB often drops a one-shot). Extra `STOP` / `WAYPOINT` during `PI_HOLD` / `GOTO-C` are ignored. `CLEAR` does not abort an arc already in progress.
+The Pi re-sends `WAYPOINT` from the **current** box while the block stays locked (USB drops + closed-loop C). Extra `STOP` during `PI_HOLD` / `GOTO-C` is ignored. `CLEAR` does not abort an arc already in progress.
 
 If the pass is too wide, lower `WHEELBASE_CM`. Too tight: raise it, or on the Pi use 30 px + new `AB_DISTANCE_CM`.
 
