@@ -478,28 +478,16 @@ int sideAvoidGotoCServo(int waypointAngle) {
 }
 
 int steerTowardLaneMiddle() {
-  int offset = constrain(RECENTER_SERVO, 16, DIFF);
-  bool steerRight;
-
-  bool valid = (currentLeftDist > 0 && currentRightDist > 0);
-  int gap = valid ? (currentLeftDist - currentRightDist) : 0;
-  if (valid) {
-    if (abs(gap) <= RECENTER_BALANCE_CM) {
-      return SERVO_CENTER;
-    }
-    offset = constrain(abs(gap), 16, RECENTER_SERVO);
-    offset = constrain(offset, 0, DIFF);
+  if (currentLeftDist <= 0 || currentRightDist <= 0) {
+    return SERVO_CENTER;
   }
-
-  // Red passed on the right → original middle is left → follow L/R (usually left).
-  // Green passed on the left → original middle is right → opposite of red.
-  if (waypointPassRight) {
-    if (!valid) return SERVO_CENTER;
-    steerRight = (gap < 0);
-  } else {
-    steerRight = true;
+  int gap = currentLeftDist - currentRightDist; // L < R → closer to left → steer right
+  if (abs(gap) <= RECENTER_BALANCE_CM) {
+    return SERVO_CENTER;
   }
-
+  int offset = constrain(abs(gap), 16, RECENTER_SERVO);
+  offset = constrain(offset, 0, DIFF);
+  bool steerRight = (gap < 0);
   int angle;
   if (INVERT_STEERING) {
     angle = steerRight ? (SERVO_CENTER + offset) : (SERVO_CENTER - offset);
@@ -515,9 +503,7 @@ void beginAfterCPause() {
   currentState = PI_AFTER_C_PAUSE;
   blockPassUntil = millis() + AFTER_C_PAUSE_MS + RECENTER_MAX_MS + BLOCK_PASS_IGNORE_MS;
   ignoreFrontLidarFor(AFTER_C_PAUSE_MS + RECENTER_MAX_MS + WAYPOINT_LIDAR_IGNORE_MS);
-  Serial.println(waypointPassRight
-                   ? "PI: arrived at C — pause then red MIDPATH (toward left/centre)"
-                   : "PI: arrived at C — pause then green MIDPATH (toward right/centre)");
+  Serial.println("PI: arrived at C — pause then L/R LiDAR MIDPATH");
 }
 
 void handlePiStop() {
@@ -728,7 +714,7 @@ void executeAfterCPause() {
     lastHeadingError = 0.0;
     lastHeadingTime = millis();
     integralError = 0.0;
-    Serial.print(waypointPassRight ? "PI: MIDPATH red  L=" : "PI: MIDPATH green (right)  L=");
+    Serial.print("PI: MIDPATH  L=");
     Serial.print(currentLeftDist);
     Serial.print(" R=");
     Serial.println(currentRightDist);
@@ -759,7 +745,7 @@ void executePiRecenter(float currentHeading) {
     Serial.print(currentLeftDist);
     Serial.print(" R=");
     Serial.print(currentRightDist);
-    Serial.println(waypointPassRight ? " — red (left/centre)" : " — green (right/centre)");
+    Serial.println(" — holding pre-block heading");
   }
 }
 
@@ -828,13 +814,9 @@ void printTelemetry(float currentHeading) {
     btPrint("° | Delta: "); btPrint(abs(angleDifference));
     btPrint("°");
   } else if (currentState == PI_RECENTER) {
-    if (waypointPassRight) {
-      btPrint(" | L-R: "); btPrint(currentLeftDist - currentRightDist);
-      btPrint("cm | Ms: "); btPrint(millis() - afterCPhaseStart);
-    } else {
-      btPrint(" | Path: "); btPrint(straightTargetHeading);
-      btPrint("° | pull=right | Ms: "); btPrint(millis() - afterCPhaseStart);
-    }
+    btPrint(" | L-R: "); btPrint(currentLeftDist - currentRightDist);
+    btPrint("cm | "); btPrint(waypointPassRight ? "pull=left/lidar" : "pull=right");
+    btPrint(" | Ms: "); btPrint(millis() - afterCPhaseStart);
   }
 
   btPrint(" | Servo Angle: "); btPrint(finalServoAngle); btPrintln("°");
