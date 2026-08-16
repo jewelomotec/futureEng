@@ -125,11 +125,13 @@ unsigned long WAYPOINT_MAX_MS = 4000;
 float ESTIMATED_FWD_CMS = 30.0;            // rough cm/s at STRAIGHT_SPEED — backup timer
 int SIDE_AVOID_CM = 12;                    // during GOTO-C, steer away if L or R closer than this
 int SIDE_AVOID_SERVO = 28;                 // extra steer away from that wall (degrees off centre)
-unsigned long AFTER_C_PAUSE_MS = 500;      // sit after C (raise locally to watch C; next step is still MIDPATH)
-unsigned long RECENTER_MAX_MS = 1500;      // then drive toward the pass side (red right / green left)
-int RECENTER_BALANCE_CM = 10;              // unused for post-C; L-R is the outer lane, not the 40 cm gap
-int RECENTER_SERVO = 22;                   // after C: opposite the pass (red→left, green→right) back to mid-lane
+unsigned long AFTER_C_PAUSE_MS = 500;      // sit after C (use 5000 locally to inspect C)
+unsigned long RECENTER_MAX_MS = 2500;      // then L/R LiDAR until |L-R| is small, or this timeout
+int RECENTER_BALANCE_CM = 8;               // |L-R| that counts as middle of the path those two see
+int RECENTER_SERVO = 28;                   // max offset while centering (proportional to |L-R|)
+unsigned long RECENTER_HOLD_MS = 250;      // stay balanced this long before leaving MIDPATH
 unsigned long afterCPhaseStart = 0;
+unsigned long recenterBalancedStart = 0;
 
 bool waypointReady = false;
 float waypointStartHeading = 0.0;
@@ -577,34 +579,16 @@ int sideAvoidGotoCServo(int waypointAngle) {
 }
 
 int steerTowardLaneMiddle() {
-  int offset = constrain(RECENTER_SERVO, 0, DIFF);
   if (currentLeftDist <= 0 || currentRightDist <= 0) {
     return SERVO_CENTER;
   }
-  int gap = currentLeftDist - currentRightDist;
+  int gap = currentLeftDist - currentRightDist; // L < R → closer to left → steer right
   if (abs(gap) <= RECENTER_BALANCE_CM) {
     return SERVO_CENTER;
   }
-  bool steerRight = (gap < 0); // left smaller = closer to left wall → go right
-  int angle;
-  if (INVERT_STEERING) {
-    angle = steerRight ? (SERVO_CENTER + offset) : (SERVO_CENTER - offset);
-  } else {
-    angle = steerRight ? (SERVO_CENTER - offset) : (SERVO_CENTER + offset);
-  }
-  return constrain(angle, SERVO_MAX_RIGHT, SERVO_MAX_LEFT);
-}
-
-// After a red pass the bot is already on the right of the path → steer LEFT
-// toward mid-lane. Green pass → already left → steer RIGHT. Do not keep
-// turning into the wall we are heading toward.
-int steerTowardPassSide() {
-  int offset = constrain(RECENTER_SERVO, 0, DIFF);
-  bool steerRight = !waypointPassRight;
-  int towardDist = steerRight ? currentRightDist : currentLeftDist;
-  if (towardDist > 0 && towardDist < SIDE_AVOID_CM) {
-    return SERVO_CENTER;
-  }
+  int offset = constrain(abs(gap) / 2, 8, RECENTER_SERVO);
+  offset = constrain(offset, 0, DIFF);
+  bool steerRight = (gap < 0);
   int angle;
   if (INVERT_STEERING) {
     angle = steerRight ? (SERVO_CENTER + offset) : (SERVO_CENTER - offset);
@@ -623,7 +607,7 @@ void beginAfterCPause() {
   afterCPhaseStart = millis();
   currentState = PI_AFTER_C_PAUSE;
   ignoreFrontLidarFor(AFTER_C_PAUSE_MS + RECENTER_MAX_MS + WAYPOINT_LIDAR_IGNORE_MS);
-  Serial.println("PI: arrived at C — pause then steer back to mid-lane");
+  Serial.println("PI: arrived at C — pause then L/R LiDAR to mid-path");
 }
 
 void handlePiStop() {
@@ -821,21 +805,38 @@ void executeAfterCPause() {
     afterCPhaseStart = millis();
     currentState = PI_RECENTER;
     rampArmedForThisPhase = false;
-    Serial.println(waypointPassRight
-                      ? "PI: MIDPATH — red pass, steer left to middle"
-                      : "PI: MIDPATH — green pass, steer right to middle");
+    recenterBalancedStart = 0;
+    Serial.print("PI: MIDPATH — L/R LiDAR center  L=");
+    Serial.print(currentLeftDist);
+    Serial.print(" R=");
+    Serial.println(currentRightDist);
   }
 }
 
 void executePiRecenter() {
   setMotorOutput(STRAIGHT_SPEED);
-  int steer = steerTowardPassSide();
+  int steer = steerTowardLaneMiddle();
   steeringServo.write(steer);
   finalServoAngle = steer;
 
-  if ((millis() - afterCPhaseStart) >= RECENTER_MAX_MS) {
+  bool valid = (currentLeftDist > 0 && currentRightDist > 0);
+  bool balanced = valid && (abs(currentLeftDist - currentRightDist) <= RECENTER_BALANCE_CM);
+  if (balanced) {
+    if (recenterBalancedStart == 0) recenterBalancedStart = millis();
+  } else {
+    recenterBalancedStart = 0;
+  }
+
+  unsigned long elapsed = millis() - afterCPhaseStart;
+  bool held = balanced && (millis() - recenterBalancedStart >= RECENTER_HOLD_MS);
+  if (held || elapsed >= RECENTER_MAX_MS) {
+    straightTargetHeading = getSmoothedHeading();
     resumeStraightDriving();
-    Serial.println("PI: mid-lane steer done — holding original heading");
+    Serial.print(held ? "PI: MIDPATH balanced L=" : "PI: MIDPATH timeout L=");
+    Serial.print(currentLeftDist);
+    Serial.print(" R=");
+    Serial.print(currentRightDist);
+    Serial.println(" — holding this heading");
   }
 }
 
