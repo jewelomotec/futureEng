@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 # ASCII-only file so a Pi paste does not turn dashes into garbage.
 """
-Block detector (GitHub name) - wro_block_detector.py
+Block detector - detect.py (canonical race Python in this repo).
 
-Official name: Block detector, GitHub filename.
-Identical to detect.py. Use either file as the source to paste into round2.py
-on the Pi. Named inventory: docs/CODE_CATALOG.md
+Official name: Block detector.
+Same source as wro_block_detector.py. On the Pi, paste into round2.py and
+start with systemd unit round2 (deploy/round2.service).
+
+Runs on the Raspberry Pi: Lenovo webcam + best_ncnn.onnx, votes 5/7 frames,
+freezes A/B/C at STOP_HEIGHT_PX, sends STOP then WAYPOINT (also REVERSE/CLEAR)
+at 115200 to ESP32_Robot.ino. Logs to wro_detect.log.
+
+Does not steer or read LiDAR. Named inventory: docs/CODE_CATALOG.md
 """
 
 import math
@@ -211,7 +217,7 @@ def arc_b_to_c(x_c: float, y_c: float) -> dict:
     }
 
 
-def median_detection_box(hist) -> dict | None:
+def median_detection_box(hist):
     """Median box over the last MIN_VOTES hits so A/C is not one noisy frame."""
     boxes = [b for b in hist if b is not None]
     if not boxes:
@@ -437,7 +443,35 @@ def setup_run_log():
     return path, log_file
 
 
-def ascii_only(text: str) -> str:
+def open_pi_serial():
+    """Open ESP USB. Fall back to a plain Serial() if extra flags fail."""
+    try:
+        import serial
+    except Exception as e:
+        print("pyserial not installed: %s" % e, flush=True)
+        return None
+    last_err = None
+    extra = dict(timeout=0.2, write_timeout=0.5, dsrdtr=False, rtscts=False)
+    plain = dict(timeout=1)
+    for port in SERIAL_PORTS:
+        for kwargs in (extra, plain):
+            try:
+                ser = serial.Serial(port, SERIAL_BAUD, **kwargs)
+                time.sleep(0.3)
+                try:
+                    ser.reset_input_buffer()
+                    ser.reset_output_buffer()
+                except Exception:
+                    pass
+                print("Serial port opened: %s" % port, flush=True)
+                return ser
+            except Exception as e:
+                last_err = e
+    print("Could not open serial port: %s" % last_err, flush=True)
+    return None
+
+
+def ascii_only(text):
     return "".join(ch for ch in text if 32 <= ord(ch) <= 126)
 
 
@@ -472,44 +506,19 @@ def start_esp_log_thread(ser, stop_flag):
 # Main
 # ---------------------------------------------------------------------------
 def main(camera_id: int = CAMERA_ID, frame_size: int = FRAME_SIZE):
+    print("detect.py start python=%s" % sys.version.split()[0], flush=True)
     log_path, log_file = setup_run_log()
     set_manual_camera_controls(camera_id, CAMERA_EXPOSURE, CAMERA_WB_TEMP)
 
-    ser = None
+    ser = open_pi_serial()
     esp_log_thread = None
-    try:
-        import serial
-        last_err = None
-        for port in SERIAL_PORTS:
-            try:
-                ser = serial.Serial(
-                    port,
-                    SERIAL_BAUD,
-                    timeout=0.2,
-                    write_timeout=0.5,
-                    dsrdtr=False,
-                    rtscts=False,
-                )
-                time.sleep(0.4)
-                ser.reset_input_buffer()
-                ser.reset_output_buffer()
-                print(f"Serial port opened: {port}")
-                break
-            except Exception as e:
-                last_err = e
-                ser = None
-        if ser is None:
-            print(f"Could not open serial port: {last_err}")
-        else:
-            try:
-                ser.reset_input_buffer()
-            except Exception:
-                pass
-    except Exception as e:
-        print(f"Could not open serial port: {e}")
-        ser = None
 
-    session, input_name, _ = load_onnx_session(ONNX_MODEL_PATH)
+    try:
+        session, input_name, _ = load_onnx_session(ONNX_MODEL_PATH)
+    except Exception as e:
+        print("ONNX load failed: %s" % e, flush=True)
+        print("Put best_ncnn.onnx next to round2.py", flush=True)
+        raise
 
     t, frame_q, stop_flag, cam = start_capture_thread(camera_id, frame_size)
     if ser is not None:
@@ -542,7 +551,12 @@ def main(camera_id: int = CAMERA_ID, frame_size: int = FRAME_SIZE):
         return
 
     window_name = "WRO Block Detector (ONNX)"
-    cv2.namedWindow(window_name)
+    preview = True
+    try:
+        cv2.namedWindow(window_name)
+    except Exception as e:
+        preview = False
+        print("No preview window (%s) - running headless" % e, flush=True)
 
     red_hist = deque(maxlen=VOTE_HISTORY)
     green_hist = deque(maxlen=VOTE_HISTORY)
@@ -674,40 +688,41 @@ def main(camera_id: int = CAMERA_ID, frame_size: int = FRAME_SIZE):
             except Exception as e:
                 print(f"Serial write failed: {e}", flush=True)
 
-            # Display drawing (unchanged)
-            display_red = red_box if red_confirmed else None
-            display_green = green_box if green_confirmed else None
-            bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-            display = draw_boxes(bgr, display_red, display_green)
-
             h_now = primary_box["height"] if primary_box else 0
-            ser_txt = ser.port if ser is not None else "NO-SERIAL"
-            cv2.putText(
-                display,
-                f"{decision} h={h_now} stop={STOP_HEIGHT_PX} {ser_txt}",
-                (2, 12),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 255, 255) if decision == "STOP" else (255, 255, 255), 1,
-            )
+            if preview:
+                try:
+                    display_red = red_box if red_confirmed else None
+                    display_green = green_box if green_confirmed else None
+                    bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                    display = draw_boxes(bgr, display_red, display_green)
+                    ser_txt = ser.port if ser is not None else "NO-SERIAL"
+                    cv2.putText(
+                        display,
+                        f"{decision} h={h_now} stop={STOP_HEIGHT_PX} {ser_txt}",
+                        (2, 12),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.35,
+                        (0, 255, 255) if decision == "STOP" else (255, 255, 255), 1,
+                    )
+                    if waypoint_lock is not None:
+                        xa, ya = waypoint_lock["A_cm"]
+                        xc, yc = waypoint_lock["C_cm"]
+                        cv2.putText(
+                            display,
+                            f"{waypoint_lock['color']} A=({xa:.0f},{ya:.0f}) C=({xc:.0f},{yc:.0f}) th={waypoint_lock['theta_deg']:.0f}",
+                            (2, frame_size - 24),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 255, 255), 1,
+                        )
+                    display = upscale_for_display(display, scale=3)
+                    cv2.imshow(window_name, display)
+                    key = cv2.waitKey(1) & 0xFF
+                    if key == ord("q"):
+                        break
+                except Exception as e:
+                    preview = False
+                    print("Preview failed, headless: %s" % e, flush=True)
 
-            if waypoint_lock is not None:
-                xa, ya = waypoint_lock["A_cm"]
-                xc, yc = waypoint_lock["C_cm"]
-                cv2.putText(
-                    display,
-                    f"{waypoint_lock['color']} A=({xa:.0f},{ya:.0f}) C=({xc:.0f},{yc:.0f}) th={waypoint_lock['theta_deg']:.0f}",
-                    (2, frame_size - 24),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 255, 255), 1,
-                )
-
-            display = upscale_for_display(display, scale=3)
-            cv2.imshow(window_name, display)
             frame_count += 1
-
             print(f"Frame {frame_count} | {decision} | RED:{red_box} | GREEN:{green_box}", flush=True)
-
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord('q'):
-                break
 
     except KeyboardInterrupt:
         pass
@@ -727,7 +742,16 @@ def main(camera_id: int = CAMERA_ID, frame_size: int = FRAME_SIZE):
                 log_file.close()
             except Exception:
                 pass
-        cv2.destroyAllWindows()
+        if preview:
+            try:
+                cv2.destroyAllWindows()
+            except Exception:
+                pass
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        raise
