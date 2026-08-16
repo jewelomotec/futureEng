@@ -107,10 +107,15 @@ unsigned long arcStartTime = 0;
 // Pi sends STOP then WAYPOINT,color,xa,ya,xc,yc,R,theta,arclen
 float WHEELBASE_CM = 18.0;                 // used to turn radius into a servo angle
 unsigned long WAYPOINT_PAUSE_MS = 400;     // stand still after STOP before driving to C
-float WAYPOINT_EXIT_DEG = 8.0;             // IMU heading error that counts as "arrived"
+float WAYPOINT_EXIT_DEG = 5.0;             // heading error allowed once the arc length is done
 unsigned long WAYPOINT_MIN_MS = 250;
 unsigned long WAYPOINT_MAX_MS = 4000;
-float ESTIMATED_FWD_CMS = 30.0;            // rough cm/s at STRAIGHT_SPEED — backup timer
+float ESTIMATED_FWD_CMS = 30.0;            // cm/s at STRAIGHT_SPEED — used for arc progress
+float GOTO_HEADING_KP = 0.9;               // extra steer (deg) per deg of heading lag on the arc
+const int GOTO_MAX_CORR = 12;              // clamp on that extra steer
+const float GOTO_ARRIVE_ARC_CM = 8.0;      // remaining path length that counts as "at C"
+const int GOTO_END_SPEED = 55;             // slow near C so the last centimetres are not a blur
+const unsigned long TELEMETRY_MS = 80;     // do not flood USB while the Pi is sending WAYPOINT
 
 bool waypointReady = false;
 float waypointStartHeading = 0.0;
@@ -118,9 +123,15 @@ float waypointTargetHeading = 0.0;
 float waypointRadiusCm = 0.0;
 float waypointThetaDeg = 0.0;
 float waypointArcLenCm = 0.0;
+float waypointInitialArcLenCm = 0.0;
+float waypointXc = 0.0;
+float waypointYc = 0.0;
 int waypointServoAngle = 90;
 unsigned long piHoldStart = 0;
 unsigned long waypointArcStart = 0;
+unsigned long waypointArcOrigin = 0;       // first GOTO-C start — max-time cap
+unsigned long waypointRemainStart = 0;     // start of current (possibly live-updated) remaining arc
+unsigned long lastTelemetryMs = 0;
 unsigned long lastPiCmd = 0;
 
 
@@ -508,6 +519,16 @@ void resumeStraightDriving() {
   integralError = 0.0;
 }
 
+unsigned long gotoExpectedMs(float arcLenCm) {
+  unsigned long expectedMs = WAYPOINT_MIN_MS;
+  if (ESTIMATED_FWD_CMS > 1.0 && arcLenCm > 0.0) {
+    expectedMs = (unsigned long)(1000.0 * arcLenCm / ESTIMATED_FWD_CMS);
+  }
+  if (expectedMs < WAYPOINT_MIN_MS) expectedMs = WAYPOINT_MIN_MS;
+  if (expectedMs > WAYPOINT_MAX_MS) expectedMs = WAYPOINT_MAX_MS;
+  return expectedMs;
+}
+
 int servoAngleFromRadius(float radiusCm) {
   int offset = 0;
   if (!isfinite(radiusCm) || fabs(radiusCm) > 400.0) {
@@ -569,23 +590,27 @@ void handlePiWaypoint(String line) {
     return;
   }
 
-  if (currentState == WAYPOINT_ARC) {
-    // Already driving to C — ignore USB retransmits.
-    return;
-  }
-
-  waypointThetaDeg = parts[7].toFloat();
-  waypointArcLenCm = parts[8].toFloat();
+  float newTheta = parts[7].toFloat();
+  float newArc = parts[8].toFloat();
+  float newXc = parts[4].toFloat();
+  float newYc = parts[5].toFloat();
   String rStr = parts[6];
   rStr.trim();
   rStr.toLowerCase();
-  if (rStr == "inf") {
-    waypointRadiusCm = INFINITY;
-  } else {
-    waypointRadiusCm = rStr.toFloat();
-  }
+  float newR = (rStr == "inf") ? INFINITY : rStr.toFloat();
 
-  if (currentState != PI_HOLD) {
+  bool liveUpdate = (currentState == WAYPOINT_ARC);
+  bool sameShot = !liveUpdate && waypointReady &&
+                  (fabs(newArc - waypointArcLenCm) < 1.0) &&
+                  (fabs(newTheta - waypointThetaDeg) < 1.0);
+
+  waypointThetaDeg = newTheta;
+  waypointArcLenCm = newArc;
+  waypointXc = newXc;
+  waypointYc = newYc;
+  waypointRadiusCm = newR;
+
+  if (currentState != PI_HOLD && !liveUpdate) {
     waypointStartHeading = getSmoothedHeading();
     piHoldStart = millis();
     currentState = PI_HOLD;
@@ -594,20 +619,37 @@ void handlePiWaypoint(String line) {
     finalServoAngle = SERVO_CENTER;
   }
 
-  waypointTargetHeading = wrapHeading(waypointStartHeading + waypointThetaDeg);
+  if (liveUpdate) {
+    // Keep the original arc clock. Only retarget steer / remaining C from the camera.
+    waypointTargetHeading = wrapHeading(getSmoothedHeading() + waypointThetaDeg);
+  } else {
+    waypointTargetHeading = wrapHeading(waypointStartHeading + waypointThetaDeg);
+  }
+
   waypointServoAngle = servoAngleFromRadius(waypointRadiusCm);
   waypointReady = true;
 
-  Serial.print("PI: WAYPOINT R=");
-  Serial.print(waypointRadiusCm);
-  Serial.print(" theta=");
-  Serial.print(waypointThetaDeg);
-  Serial.print(" servo=");
-  Serial.println(waypointServoAngle);
+  if (!sameShot) {
+    Serial.print(liveUpdate ? "PI: GOTO-C retarget R=" : "PI: WAYPOINT R=");
+    Serial.print(waypointRadiusCm);
+    Serial.print(" theta=");
+    Serial.print(waypointThetaDeg);
+    Serial.print(" len=");
+    Serial.print(waypointArcLenCm);
+    Serial.print(" C=(");
+    Serial.print(waypointXc);
+    Serial.print(",");
+    Serial.print(waypointYc);
+    Serial.print(") servo=");
+    Serial.println(waypointServoAngle);
+  }
 }
 
 void handlePiReverse() {
   lastPiCmd = millis();
+  if (currentState == WAYPOINT_ARC) {
+    return;  // too-close REVERSE must not abort a pass already aimed at C
+  }
   waypointReady = false;
   currentState = PI_REVERSE;
   Serial.println("PI: REVERSE");
@@ -669,7 +711,11 @@ void executePiHold() {
 
   if (waypointReady && (millis() - piHoldStart >= WAYPOINT_PAUSE_MS)) {
     currentState = WAYPOINT_ARC;
-    waypointArcStart = millis();
+    unsigned long now = millis();
+    waypointArcStart = now;
+    waypointArcOrigin = now;
+    waypointRemainStart = now;
+    waypointInitialArcLenCm = waypointArcLenCm;
     rampArmedForThisPhase = false;
     Serial.println("PI: driving arc to C");
   } else if (!waypointReady && (millis() - piHoldStart > OBSTACLE_TIMEOUT_MS)) {
@@ -679,32 +725,75 @@ void executePiHold() {
   }
 }
 
+void finishGotoC(const char* why) {
+  steeringServo.write(SERVO_CENTER);
+  finalServoAngle = SERVO_CENTER;
+  // Hold the heading the arc ends on (tangent at C), not the pre-stop heading.
+  straightTargetHeading = waypointTargetHeading;
+  resumeStraightDriving();
+  Serial.print("PI: arrived at C (");
+  Serial.print(why);
+  Serial.println(") — holding exit heading");
+}
+
 void executeWaypointArc(float currentHeading) {
-  setMotorOutput(STRAIGHT_SPEED);
-  steeringServo.write(waypointServoAngle);
-  finalServoAngle = waypointServoAngle;
+  unsigned long now = millis();
+  unsigned long elapsed = now - waypointArcOrigin;
+  float planLen = (waypointInitialArcLenCm > 1.0) ? waypointInitialArcLenCm : waypointArcLenCm;
+  unsigned long expectedMs = gotoExpectedMs(planLen);
+  float progress = expectedMs > 0 ? (float)elapsed / (float)expectedMs : 1.0;
+  if (progress < 0.0) progress = 0.0;
+
+  bool liveSteer = (now - lastPiCmd) < 700;
+  float schedFrac = progress;
+  if (schedFrac > 1.0) schedFrac = 1.0;
+  float desiredHeading;
+  float kp = GOTO_HEADING_KP;
+  if (liveSteer) {
+    // Camera is still sending remaining R — follow that curvature, nudge toward remaining theta.
+    desiredHeading = waypointTargetHeading;
+    kp = GOTO_HEADING_KP * 0.4;
+  } else {
+    desiredHeading = wrapHeading(waypointStartHeading + waypointThetaDeg * schedFrac);
+  }
+
+  float rawError = desiredHeading - currentHeading;
+  if (rawError > 180.0)  rawError -= 360.0;
+  if (rawError < -180.0) rawError += 360.0;
+
+  int headingCorr = (int)round(rawError * kp);
+  headingCorr = constrain(headingCorr, -GOTO_MAX_CORR, GOTO_MAX_CORR);
+
+  int steer = waypointServoAngle;
+  if (INVERT_STEERING) {
+    steer = waypointServoAngle + headingCorr;
+  } else {
+    steer = waypointServoAngle - headingCorr;
+  }
+  steer = constrain(steer, SERVO_MAX_RIGHT, SERVO_MAX_LEFT);
+  steeringServo.write(steer);
+  finalServoAngle = steer;
+
+  int speed = STRAIGHT_SPEED;
+  if (progress > 0.65) {
+    float t = (progress - 0.65) / 0.35;
+    if (t > 1.0) t = 1.0;
+    speed = (int)round(STRAIGHT_SPEED + (GOTO_END_SPEED - STRAIGHT_SPEED) * t);
+    if (speed < GOTO_END_SPEED) speed = GOTO_END_SPEED;
+  }
+  setMotorOutput(speed);
 
   angleDifference = shortestAngleDiff(currentHeading, waypointTargetHeading);
-  unsigned long elapsed = millis() - waypointArcStart;
-
-  bool headingClose = abs(angleDifference) <= WAYPOINT_EXIT_DEG;
-  bool minTime = elapsed >= WAYPOINT_MIN_MS;
+  bool headingAtC = abs(angleDifference) <= WAYPOINT_EXIT_DEG;
+  bool ranEnough = elapsed >= ((expectedMs * 92UL) / 100UL);
+  bool extraWait = elapsed >= expectedMs + 400;
+  bool remainingTiny = (waypointArcLenCm > 0.0 && waypointArcLenCm <= GOTO_ARRIVE_ARC_CM) &&
+                       (waypointYc <= (GOTO_ARRIVE_ARC_CM + 6.0));
   bool maxTime = elapsed >= WAYPOINT_MAX_MS;
 
-  unsigned long expectedMs = 1000;
-  if (ESTIMATED_FWD_CMS > 1.0 && waypointArcLenCm > 0.0) {
-    expectedMs = (unsigned long)(1000.0 * waypointArcLenCm / ESTIMATED_FWD_CMS);
-    if (expectedMs < WAYPOINT_MIN_MS) expectedMs = WAYPOINT_MIN_MS;
-    if (expectedMs > WAYPOINT_MAX_MS) expectedMs = WAYPOINT_MAX_MS;
-  }
-  bool distanceGuess = elapsed >= expectedMs && headingClose;
-
-  if ((minTime && headingClose) || distanceGuess || maxTime) {
-    steeringServo.write(SERVO_CENTER);
-    finalServoAngle = SERVO_CENTER;
-    straightTargetHeading = waypointStartHeading;
-    resumeStraightDriving();
-    Serial.println("PI: arrived at C — resuming original heading");
+  // Do not quit on heading alone — that used to stop short of C.
+  if (remainingTiny || (ranEnough && headingAtC) || extraWait || maxTime) {
+    finishGotoC(maxTime && !headingAtC ? "timeout" : "arc");
   }
 }
 
@@ -1261,6 +1350,10 @@ void loop() {
   }
 
 
-  printTelemetry(currentHeading);
+  unsigned long nowTel = millis();
+  if (nowTel - lastTelemetryMs >= TELEMETRY_MS) {
+    lastTelemetryMs = nowTel;
+    printTelemetry(currentHeading);
+  }
   delay(20);
 }

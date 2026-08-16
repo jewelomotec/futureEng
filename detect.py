@@ -51,7 +51,10 @@ CLEAR_HISTORY = 10              # consecutive CLEAR frames before we drop a wayp
 
 # Too close — abort / reverse.
 REVERSE_HEIGHT_PX = 80
-WAYPOINT_RESEND_S = 0.4         # re-send WAYPOINT while locked (USB often drops a one-shot)
+WAYPOINT_RESEND_S = 0.25        # re-send remaining B→C while locked (USB drops + live steer)
+LIVE_WAYPOINT_MIN_HEIGHT = 22   # ignore tiny/edge boxes when updating C
+LIVE_WAYPOINT_JUMP_CM = 35.0    # reject a single-frame A jump this large
+LIVE_WAYPOINT_BLEND = 0.4       # how much of the new A to mix in (rest is the previous A)
 
 # ---------------------------------------------------------------------------
 # Waypoint geometry — measure AB_DISTANCE_CM on the table at STOP_HEIGHT_PX
@@ -204,8 +207,11 @@ def arc_b_to_c(x_c: float, y_c: float) -> dict:
     }
 
 
-def compute_waypoint(box: dict, color: str, frame_size: int) -> dict:
-    x_a, y_a = block_to_robot_xy(box, frame_size)
+def compute_waypoint(box: dict, color: str, frame_size: int, a_cm=None) -> dict:
+    if a_cm is None:
+        x_a, y_a = block_to_robot_xy(box, frame_size)
+    else:
+        x_a, y_a = a_cm
     x_c, y_c = pass_point_c(x_a, y_a, color)
     arc = arc_b_to_c(x_c, y_c)
     wp = {
@@ -224,6 +230,21 @@ def compute_waypoint(box: dict, color: str, frame_size: int) -> dict:
         **arc,
     }
     return wp
+
+
+def refine_live_waypoint(old: dict, box: dict, color: str, frame_size: int) -> dict:
+    """Update remaining B→C from the current frame. B is always the robot now."""
+    if box is None or int(box.get("height") or 0) < LIVE_WAYPOINT_MIN_HEIGHT:
+        return old
+    fresh = compute_waypoint(box, color, frame_size)
+    oxa, oya = old["A_cm"]
+    nxa, nya = fresh["A_cm"]
+    if math.hypot(nxa - oxa, nya - oya) > LIVE_WAYPOINT_JUMP_CM:
+        return old
+    a = LIVE_WAYPOINT_BLEND
+    xa = (1.0 - a) * oxa + a * nxa
+    ya = (1.0 - a) * oya + a * nya
+    return compute_waypoint(box, color, frame_size, a_cm=(xa, ya))
 
 
 def format_waypoint_line(wp: dict) -> str:
@@ -517,6 +538,13 @@ def main(camera_id: int = CAMERA_ID, frame_size: int = FRAME_SIZE):
             elif waypoint_lock is not None and (red_confirmed or green_confirmed):
                 decision = "STOP"
                 active_box = active_box or waypoint_lock.get("box")
+                lock_color = waypoint_lock["color"]
+                live_box = red_stable if lock_color == "red" else green_stable
+                if live_box is not None:
+                    waypoint_lock = refine_live_waypoint(
+                        waypoint_lock, live_box, lock_color, frame_size
+                    )
+                    active_box = live_box
 
             clear_counter = clear_counter + 1 if decision == "CLEAR" else 0
             if decision == "CLEAR" and clear_counter >= CLEAR_HISTORY:
