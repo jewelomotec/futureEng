@@ -4,7 +4,7 @@ Two programs run together:
 
 | Piece | File | Runs on | Job |
 |---|---|---|---|
-| Drive / steering / walls | `ESP32_Robot/ESP32_Robot.ino` | ESP32 | Motors, servo, LiDAR, IMU, serial from the Pi |
+| Drive / steering / walls | `ESP32_Robot/ESP32_Robot.ino` | ESP32 | Motors, servo, LiDAR, IMU, serial from the Pi. **This car:** servo center **106**, DIFF **45**, wheelbase **13 cm**, front wall **20 cm**. USB serial only (no Bluetooth). |
 | Blocks | `detect.py` (same code as `wro_block_detector.py`) | Raspberry Pi | Camera + ONNX, sends `STOP` / `WAYPOINT` / `REVERSE` / `CLEAR` |
 
 The ESP drives the open-challenge **walls** by itself. The Pi only speaks up when it sees a **red or green block**. USB serial is 115200 baud (Pi `/dev/ttyUSB0` or `/dev/ttyUSB1`).
@@ -21,13 +21,13 @@ LiDARs + IMU  ------------------------------>  ESP32  -->  motor + servo
 ### Walls (LiDAR + IMU, no Pi needed)
 
 1. ESP waits for BNO055 gyro calibration (up to 10 s).
-2. Drives straight at PWM **80**, servo center **117**, PID holds heading. Speed ramps 30 → 80 over 2 s.
-3. Front LiDAR **&lt; 15 cm for 150 ms** → pause **500 ms** (wheels centered) → **reverse-arc** with servo offset `ARC_SERVO_ANGLE` (20°).
+2. Drives straight at PWM **80**, servo center **106**, PID holds heading. Speed ramps 30 → 80 over 2 s.
+3. Front LiDAR **&lt; 20 cm for 150 ms** → pause **500 ms** (wheels centered) → **reverse-arc** with servo offset `ARC_SERVO_ANGLE` (45°).
 4. When heading is within **8°** of the next cardinal (**0 / 90 / 180 / 270**), wheels center and it drives straight on that heading.
 5. **First** corner: turn toward the side with more space (left vs right LiDAR). After that, **always that same direction**.
 6. After **12** turns, if left and right are both under 100 cm and front under 150 cm for 1 s → race stop.
 
-Bluetooth telemetry: `MODE: STRAIGHT`, then `PAUSE`, then `ARC`.
+USB serial telemetry: `MODE: STRAIGHT`, then `PAUSE`, then `ARC`.
 
 ### Blocks (Pi + ESP)
 
@@ -36,7 +36,7 @@ Bluetooth telemetry: `MODE: STRAIGHT`, then `PAUSE`, then `ARC`.
    - Robot pose = **B**, block = **A**, pass point **C** = A shifted **25 cm** sideways (red → right, green → left).
    - Pi sends `STOP,...` then `WAYPOINT,...`.
 3. ESP: motors off ~**400 ms** (`MODE: PI-HOLD`), then drives **forward** to C (`MODE: GOTO-C`). Servo is `atan(wheelbase/|R|)` plus a heading correction so the IMU tracks the planned arc. The Pi **keeps sending an updated remaining B→C** while the block is in view. Arrival is when the remaining arc is short **or** ~92% of the planned distance has been driven **and** heading is within **5°** — not heading-alone (that used to stop short of C). Speed eases to PWM **55** near the end.
-4. Then **pause**, then `REJOIN`: same IMU PID as straight, aimed at the pre-block heading. After **green** (passed on the left) it also pulls **right** toward the original middle. After **red** it only uses heading PID (already good). Extra `STOP`/`WAYPOINT` on the same pillar are ignored so it cannot GOTO-C left a second time.
+4. Then **pause 5000 ms** (`C-PAUSE`). **Green:** `REJOIN` pulls **right** toward the original middle for 1 s (IMU path heading + right steer). **Red:** L/R LiDAR mid-path (unchanged). Extra `STOP`/`WAYPOINT` on the same pillar are ignored.
 5. When the block is gone for **10** frames, Pi sends `CLEAR`.
 6. Height **&gt; 80 px**: Pi sends `REVERSE` → ESP backs up at −80 until `CLEAR` or 5 s.
 
