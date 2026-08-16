@@ -83,12 +83,13 @@ float ESTIMATED_FWD_CMS = 30.0;
 int SIDE_AVOID_CM = 12;
 int SIDE_AVOID_SERVO = 28;
 unsigned long AFTER_C_PAUSE_MS = 5000;   // sit after C so you can inspect, then 2nd manoeuvre
-unsigned long REJOIN_MS = 1000;          // green: pull right toward original middle
-int REJOIN_SERVO = 28;
-unsigned long RECENTER_MAX_MS = 2500;    // red only: L/R LiDAR mid-path
+unsigned long REJOIN_MS = 700;           // green: shorter pull (harder steer, less track used)
+int REJOIN_SERVO = 40;                   // strong right pull toward original middle
+int MIDPATH_SPEED = 50;                  // slower than cruise so the slide-in uses less distance
+unsigned long RECENTER_MAX_MS = 1600;    // red L/R mid-path — don't roll as far
 int RECENTER_BALANCE_CM = 8;
-int RECENTER_SERVO = 28;
-unsigned long RECENTER_HOLD_MS = 250;
+int RECENTER_SERVO = 40;                 // sharper steer toward the middle
+unsigned long RECENTER_HOLD_MS = 120;    // leave as soon as L/R are balanced
 unsigned long afterCPhaseStart = 0;
 unsigned long recenterBalancedStart = 0;
 const unsigned long TELEMETRY_MS = 80;
@@ -486,7 +487,8 @@ int steerTowardLaneMiddle() {
   if (abs(gap) <= RECENTER_BALANCE_CM) {
     return SERVO_CENTER;
   }
-  int offset = constrain(abs(gap) / 2, 8, RECENTER_SERVO);
+  // Use the full gap (not gap/2) so the car cuts back to centre in fewer cm.
+  int offset = constrain(abs(gap), 16, RECENTER_SERVO);
   offset = constrain(offset, 0, DIFF);
   bool steerRight = (gap < 0);
   int angle;
@@ -734,6 +736,7 @@ void executePiRecenter(float currentHeading) {
   if (!waypointPassRight) {
     straightTargetHeading = pathHeadingCaptured ? pathHeadingBeforeBlock : waypointStartHeading;
     driveStraightMode(currentHeading);
+    setMotorOutput(MIDPATH_SPEED);
     int towardMiddle = servoWithOffset(true, REJOIN_SERVO);
     if (INVERT_STEERING) {
       finalServoAngle = max(finalServoAngle, towardMiddle);
@@ -751,7 +754,7 @@ void executePiRecenter(float currentHeading) {
     return;
   }
 
-  setMotorOutput(STRAIGHT_SPEED);
+  setMotorOutput(MIDPATH_SPEED);
   int steer = steerTowardLaneMiddle();
   steeringServo.write(steer);
   finalServoAngle = steer;
