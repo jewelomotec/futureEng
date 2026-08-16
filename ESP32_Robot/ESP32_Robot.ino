@@ -3,7 +3,8 @@
 // This car: SERVO_CENTER = 106, DIFF = 45, INVERT_STEERING = true.
 // STRAIGHT_SPEED 80, FRONT_TURN_DISTANCE 20, ARC_SERVO_ANGLE 45, WHEELBASE_CM 13,
 // 600 rpm N20. WAYPOINT_PAUSE_MS 400.
-// After C: 5000 ms sit, then green pulls RIGHT toward the original middle.
+// After C: pause, then slow IMU recenter onto the pre-detection heading/lane
+// for both red and green.
 
 #include <Wire.h>
 #include <math.h>
@@ -26,9 +27,10 @@
 #define MUX_CH_BNO    4
 #define TFLUNA_I2C_ADDR 0x10
 
-int STRAIGHT_SPEED = 80;
+int STRAIGHT_SPEED = 120;
 int TURN_SPEED     = 80;
 int BACKWARD_SPEED = -80;
+int GOTO_C_SPEED   = 100;
 
 const int RAMP_START_SPEED = 30;
 const int RAMP_STEP = 30;
@@ -51,14 +53,14 @@ const int MAX_TURNS      = 12;
 unsigned long turnCooldownUntil = 0;
 bool avoidDirectionRight = true;
 unsigned long lastObstacleCmd = 0;
-const unsigned long OBSTACLE_TIMEOUT_MS = 5000;
+const unsigned long OBSTACLE_TIMEOUT_MS = 500;
 const unsigned long TURN_COOLDOWN_MS = 1000;
 const unsigned long WAYPOINT_LIDAR_IGNORE_MS = 2500;
 unsigned long BLOCK_PASS_IGNORE_MS = 4000;
 
 const float CARDINAL_HEADINGS[4] = {0.0, 90.0, 180.0, 270.0};
 
-int FRONT_TURN_DISTANCE = 20;
+int FRONT_TURN_DISTANCE = 25;
 bool frontConditionActive = false;
 unsigned long frontConditionStartTime = 0;
 const unsigned long FRONT_CONFIRM_MS = 150;
@@ -76,18 +78,18 @@ unsigned long arcStartTime = 0;
 
 float WHEELBASE_CM = 13.0;
 unsigned long WAYPOINT_PAUSE_MS = 400;
-float WAYPOINT_EXIT_DEG = 12.0;
+float WAYPOINT_EXIT_DEG = 15.0;
 unsigned long WAYPOINT_MIN_MS = 250;
 unsigned long WAYPOINT_MAX_MS = 4000;
 float ESTIMATED_FWD_CMS = 30.0;
 int SIDE_AVOID_CM = 12;
 int SIDE_AVOID_SERVO = 28;
-unsigned long AFTER_C_PAUSE_MS = 5000;   // sit after C so you can inspect, then 2nd manoeuvre
-int MIDPATH_SPEED = 50;                  // slower than cruise so the slide-in uses less distance
-unsigned long RECENTER_MAX_MS = 1600;    // red and green mid-path — don't roll as far
-int RECENTER_BALANCE_CM = 8;
-int RECENTER_SERVO = 40;                 // sharper steer toward the middle
-unsigned long RECENTER_HOLD_MS = 120;    // leave as soon as L/R are balanced
+unsigned long AFTER_C_PAUSE_MS = 500;    // sit after C, then recenter onto pre-detection path
+int MIDPATH_SPEED = 50;                  // slow while sliding back to the original lane
+unsigned long RECENTER_MAX_MS = 1600;
+int RECENTER_SERVO = 45;                 // how hard to slide back (red → left, green → right)
+unsigned long RECENTER_HOLD_MS = 120;    // hold pre-block heading this long before leaving
+float RECENTER_HEADING_DEG = 6.0;        // IMU close enough to the pre-detection heading
 unsigned long afterCPhaseStart = 0;
 unsigned long recenterBalancedStart = 0;
 const unsigned long TELEMETRY_MS = 80;
@@ -503,7 +505,7 @@ void beginAfterCPause() {
   currentState = PI_AFTER_C_PAUSE;
   blockPassUntil = millis() + AFTER_C_PAUSE_MS + RECENTER_MAX_MS + BLOCK_PASS_IGNORE_MS;
   ignoreFrontLidarFor(AFTER_C_PAUSE_MS + RECENTER_MAX_MS + WAYPOINT_LIDAR_IGNORE_MS);
-  Serial.println("PI: arrived at C — pause then L/R LiDAR MIDPATH");
+  Serial.println("PI: arrived at C — pause then IMU recenter to pre-detection path");
 }
 
 void handlePiStop() {
@@ -673,7 +675,7 @@ void executePiHold() {
 }
 
 void executeWaypointArc(float currentHeading) {
-  setMotorOutput(STRAIGHT_SPEED);
+  setMotorOutput(GOTO_C_SPEED);
   int steer = sideAvoidGotoCServo(waypointServoAngle);
   steeringServo.write(steer);
   finalServoAngle = steer;
@@ -714,38 +716,42 @@ void executeAfterCPause() {
     lastHeadingError = 0.0;
     lastHeadingTime = millis();
     integralError = 0.0;
-    Serial.print("PI: MIDPATH  L=");
-    Serial.print(currentLeftDist);
-    Serial.print(" R=");
-    Serial.println(currentRightDist);
+    Serial.println("PI: MIDPATH — slow IMU onto pre-detection heading");
   }
 }
 
 void executePiRecenter(float currentHeading) {
-  (void)currentHeading;
+  // Same for red and green: hold the heading from before the block, and
+  // slide back onto that lane (red passed right → pull left; green left → pull right).
+  straightTargetHeading = pathHeadingCaptured ? pathHeadingBeforeBlock : waypointStartHeading;
+  driveStraightMode(currentHeading);
   setMotorOutput(MIDPATH_SPEED);
-  int steer = steerTowardLaneMiddle();
-  steeringServo.write(steer);
-  finalServoAngle = steer;
 
-  bool valid = (currentLeftDist > 0 && currentRightDist > 0);
-  bool balanced = valid && (abs(currentLeftDist - currentRightDist) <= RECENTER_BALANCE_CM);
-  if (balanced) {
+  bool slideRight = !waypointPassRight;  // back toward the original line
+  int bias = servoWithOffset(slideRight, RECENTER_SERVO);
+  if (INVERT_STEERING) {
+    finalServoAngle = slideRight ? max(finalServoAngle, bias) : min(finalServoAngle, bias);
+  } else {
+    finalServoAngle = slideRight ? min(finalServoAngle, bias) : max(finalServoAngle, bias);
+  }
+  finalServoAngle = constrain(finalServoAngle, SERVO_MAX_RIGHT, SERVO_MAX_LEFT);
+  steeringServo.write(finalServoAngle);
+
+  float err = abs(shortestAngleDiff(currentHeading, straightTargetHeading));
+  bool headingOk = err <= RECENTER_HEADING_DEG;
+  if (headingOk) {
     if (recenterBalancedStart == 0) recenterBalancedStart = millis();
   } else {
     recenterBalancedStart = 0;
   }
 
   unsigned long elapsed = millis() - afterCPhaseStart;
-  bool held = balanced && (millis() - recenterBalancedStart >= RECENTER_HOLD_MS);
+  bool minSlide = elapsed >= 400;
+  bool held = headingOk && minSlide && (millis() - recenterBalancedStart >= RECENTER_HOLD_MS);
   if (held || elapsed >= RECENTER_MAX_MS) {
-    straightTargetHeading = pathHeadingCaptured ? pathHeadingBeforeBlock : getSmoothedHeading();
     resumeStraightDriving();
-    Serial.print(held ? "PI: MIDPATH balanced L=" : "PI: MIDPATH timeout L=");
-    Serial.print(currentLeftDist);
-    Serial.print(" R=");
-    Serial.print(currentRightDist);
-    Serial.println(" — holding pre-block heading");
+    Serial.print(held ? "PI: MIDPATH on pre-block heading " : "PI: MIDPATH timeout heading ");
+    Serial.println(straightTargetHeading);
   }
 }
 
@@ -814,9 +820,10 @@ void printTelemetry(float currentHeading) {
     btPrint("° | Delta: "); btPrint(abs(angleDifference));
     btPrint("°");
   } else if (currentState == PI_RECENTER) {
-    btPrint(" | L-R: "); btPrint(currentLeftDist - currentRightDist);
-    btPrint("cm | "); btPrint(waypointPassRight ? "pull=left/lidar" : "pull=right");
-    btPrint(" | Ms: "); btPrint(millis() - afterCPhaseStart);
+    btPrint(" | Path: "); btPrint(straightTargetHeading);
+    btPrint("° | Current: "); btPrint(currentHeading);
+    btPrint("° | Error: "); btPrint(headingError);
+    btPrint(waypointPassRight ? "° | slide=left" : "° | slide=right");
   }
 
   btPrint(" | Servo Angle: "); btPrint(finalServoAngle); btPrintln("°");
