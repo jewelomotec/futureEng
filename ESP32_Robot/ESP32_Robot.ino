@@ -144,6 +144,17 @@ bool waypointPassRight = true;             // red passed on the right; MIDPATH t
 unsigned long piHoldStart = 0;
 unsigned long waypointArcStart = 0;
 unsigned long lastPiCmd = 0;
+unsigned long TELEMETRY_MS = 200;          // Serial Monitor: do not print every 20 ms loop (looks like garbage)
+
+void drainSerialRx() {
+  while (Serial.available() > 0) {
+    Serial.read();
+  }
+}
+
+bool serialCharOk(char c) {
+  return (c >= 32 && c < 127);
+}
 
 
 // ==========================================
@@ -716,6 +727,9 @@ void handlePiClear() {
 void handlePiLine(String line) {
   line.trim();
   if (line.length() == 0) return;
+  for (unsigned i = 0; i < line.length(); i++) {
+    if (!serialCharOk(line[i])) return;
+  }
 
   int comma = line.indexOf(',');
   String name = (comma < 0) ? line : line.substring(0, comma);
@@ -1180,6 +1194,11 @@ void setupWifiTuner() {
 // ==========================================
 void setup() {
   Serial.begin(115200);
+  delay(300);
+  drainSerialRx();
+  Serial.flush();
+  Serial.println();
+  Serial.println("ESP ready 115200");
   Wire.begin(21, 22);
   pinMode(MOTOR_IN1, OUTPUT);
   pinMode(MOTOR_IN2, OUTPUT);
@@ -1246,15 +1265,20 @@ void loop() {
   // ---- Serial command parser (Pi: STOP / WAYPOINT / REVERSE / CLEAR, plus RED/GREEN) ----
   static String serialBuffer = "";
   while (Serial.available()) {
-    char c = Serial.read();
+    char c = (char)Serial.read();
     if (c == '\n' || c == '\r') {
       if (serialBuffer.length() > 0) {
         handlePiLine(serialBuffer);
         serialBuffer = "";
       }
-    } else {
-      serialBuffer += c;
+    } else if (serialCharOk(c)) {
+      if (serialBuffer.length() < 160) {
+        serialBuffer += c;
+      } else {
+        serialBuffer = "";
+      }
     }
+    // drop boot-loader / binary junk so it never reaches WAYPOINT parse
   }
 
   // ---- Pi / obstacle safety timeout ----
@@ -1335,6 +1359,10 @@ void loop() {
   }
 
 
-  printTelemetry(currentHeading);
+  static unsigned long lastTelemetryMs = 0;
+  if (millis() - lastTelemetryMs >= TELEMETRY_MS) {
+    lastTelemetryMs = millis();
+    printTelemetry(currentHeading);
+  }
   delay(20);
 }

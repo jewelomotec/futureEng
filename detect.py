@@ -442,6 +442,10 @@ def setup_run_log():
     return path, log_file
 
 
+def ascii_only(text: str) -> str:
+    return "".join(ch for ch in text if 32 <= ord(ch) <= 126)
+
+
 def start_esp_log_thread(ser, stop_flag):
     """Read ESP telemetry (MODE: GOTO-C, PI: STOP, …) into the same log."""
 
@@ -453,12 +457,15 @@ def start_esp_log_thread(ser, stop_flag):
                 if not n:
                     time.sleep(0.02)
                     continue
-                buf += ser.read(n).decode("ascii", errors="replace")
+                raw = ser.read(n).decode("ascii", errors="ignore")
+                buf += raw
                 while "\n" in buf:
                     line, buf = buf.split("\n", 1)
-                    line = line.strip("\r")
+                    line = ascii_only(line.strip("\r"))
                     if line:
                         print(f"ESP {line}", flush=True)
+                if len(buf) > 400:
+                    buf = ascii_only(buf[-80:])
             except Exception:
                 break
 
@@ -480,7 +487,17 @@ def main(camera_id: int = CAMERA_ID, frame_size: int = FRAME_SIZE):
         last_err = None
         for port in SERIAL_PORTS:
             try:
-                ser = serial.Serial(port, SERIAL_BAUD, timeout=1)
+                ser = serial.Serial(
+                    port,
+                    SERIAL_BAUD,
+                    timeout=0.2,
+                    write_timeout=0.5,
+                    dsrdtr=False,
+                    rtscts=False,
+                )
+                time.sleep(0.4)
+                ser.reset_input_buffer()
+                ser.reset_output_buffer()
                 print(f"Serial port opened: {port}")
                 break
             except Exception as e:
