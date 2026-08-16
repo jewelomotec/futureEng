@@ -36,7 +36,7 @@ Bluetooth telemetry: `MODE: STRAIGHT`, then `PAUSE`, then `ARC`.
    - Robot pose = **B**, block = **A**, pass point **C** = A shifted **25 cm** sideways (red → right, green → left).
    - Pi sends `STOP,...` then `WAYPOINT,...`.
 3. ESP: motors off ~**400 ms** (`MODE: PI-HOLD`), then drives **forward** to C (`MODE: GOTO-C`). Servo is `atan(wheelbase/|R|)` plus a heading correction so the IMU tracks the planned arc. The Pi **keeps sending an updated remaining B→C** while the block is in view. Arrival is when the remaining arc is short **or** ~92% of the planned distance has been driven **and** heading is within **5°** — not heading-alone (that used to stop short of C). Speed eases to PWM **55** near the end.
-4. Then PID holds the **heading at C** (the arc exit), not the pre-stop heading.
+4. Then `DRIVING_STRAIGHT` PID locks the **same IMU heading as before the block** (`straightTargetHeading` at `STOP`), not the arc-exit heading and not L/R LiDAR mid-path. Front LiDAR wall-turns are ignored for 2 s so it can straighten.
 5. When the block is gone for **10** frames, Pi sends `CLEAR`.
 6. Height **&gt; 80 px**: Pi sends `REVERSE` → ESP backs up at −80 until `CLEAR` or 5 s.
 
@@ -203,7 +203,7 @@ Bluetooth examples: `FRONT=10`, `CENTER=117`, `STRAIGHT=80`, `ARCANGLE=20`.
 3. Servo from `atan(WHEELBASE_CM / |R|)`, plus IMU correction so heading follows the arc as distance is covered.
 4. While GOTO-C is running, a new `WAYPOINT` **retargets** R/theta/C (live camera remaining path). It does not restart the 4 s timeout.
 5. Drive forward, slowing near the end, until remaining length is small, or ~92% of the planned arc is done and heading is within 5°, or 4 s.
-6. Center wheels; `straightTargetHeading` = heading at C.
+6. Center wheels; restore `straightTargetHeading` from **before the block** and run the same IMU straight PID.
 
 The Pi re-sends `WAYPOINT` from the **current** box while the block stays locked (USB drops + closed-loop C). Extra `STOP` during `PI_HOLD` / `GOTO-C` is ignored. `CLEAR` does not abort an arc already in progress.
 

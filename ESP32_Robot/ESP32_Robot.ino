@@ -67,6 +67,7 @@ bool avoidDirectionRight = true;               // true = swerve right, false = s
 unsigned long lastObstacleCmd = 0;             // timestamp of last RED/GREEN command
 const unsigned long OBSTACLE_TIMEOUT_MS = 5000; // auto-clear after 5s of no command
 const unsigned long TURN_COOLDOWN_MS = 1000; // how long to ignore front-wall checks after a turn
+const unsigned long AFTER_C_LIDAR_IGNORE_MS = 2000; // straighten onto the old heading before wall-turns
 
 // Cardinal heading snap table — every commanded turn target is forced onto one of these,
 // so sensor noise/drift can never leave the robot aiming at something like 250°.
@@ -118,7 +119,9 @@ const int GOTO_END_SPEED = 55;             // slow near C so the last centimetre
 const unsigned long TELEMETRY_MS = 80;     // do not flood USB while the Pi is sending WAYPOINT
 
 bool waypointReady = false;
-float waypointStartHeading = 0.0;
+float waypointStartHeading = 0.0;          // IMU at STOP — used to build the arc
+float pathHeadingBeforeBlock = 0.0;        // straightTargetHeading at STOP — rejoin this after C
+bool pathHeadingCaptured = false;
 float waypointTargetHeading = 0.0;
 float waypointRadiusCm = 0.0;
 float waypointThetaDeg = 0.0;
@@ -513,6 +516,7 @@ float wrapHeading(float deg) {
 void resumeStraightDriving() {
   currentState = DRIVING_STRAIGHT;
   waypointReady = false;
+  pathHeadingCaptured = false;
   rampArmedForThisPhase = false;
   lastHeadingError = 0.0;
   lastHeadingTime = millis();
@@ -551,6 +555,12 @@ int servoAngleFromRadius(float radiusCm) {
   return constrain(angle, SERVO_MAX_RIGHT, SERVO_MAX_LEFT);
 }
 
+void capturePathHeadingBeforeBlock() {
+  if (pathHeadingCaptured) return;
+  pathHeadingBeforeBlock = straightTargetHeading;
+  pathHeadingCaptured = true;
+}
+
 void handlePiStop() {
   lastPiCmd = millis();
   // Duplicate STOP while already holding / arcing — do not clear waypointReady
@@ -558,6 +568,7 @@ void handlePiStop() {
   if (currentState == PI_HOLD || currentState == WAYPOINT_ARC) {
     return;
   }
+  capturePathHeadingBeforeBlock();
   waypointStartHeading = getSmoothedHeading();
   piHoldStart = millis();
   waypointReady = false;
@@ -611,6 +622,7 @@ void handlePiWaypoint(String line) {
   waypointRadiusCm = newR;
 
   if (currentState != PI_HOLD && !liveUpdate) {
+    capturePathHeadingBeforeBlock();
     waypointStartHeading = getSmoothedHeading();
     piHoldStart = millis();
     currentState = PI_HOLD;
@@ -728,12 +740,17 @@ void executePiHold() {
 void finishGotoC(const char* why) {
   steeringServo.write(SERVO_CENTER);
   finalServoAngle = SERVO_CENTER;
-  // Hold the heading the arc ends on (tangent at C), not the pre-stop heading.
-  straightTargetHeading = waypointTargetHeading;
+  // Rejoin the lane heading we were PID-holding before the Pi saw the block.
+  // Do not keep the arc-exit heading — that cuts across the path.
+  straightTargetHeading = pathHeadingCaptured ? pathHeadingBeforeBlock : waypointStartHeading;
+  unsigned long until = millis() + AFTER_C_LIDAR_IGNORE_MS;
+  if (until > turnCooldownUntil) turnCooldownUntil = until;
+  frontConditionActive = false;
   resumeStraightDriving();
   Serial.print("PI: arrived at C (");
   Serial.print(why);
-  Serial.println(") — holding exit heading");
+  Serial.print(") — STRAIGHT PID to pre-block heading ");
+  Serial.println(straightTargetHeading);
 }
 
 void executeWaypointArc(float currentHeading) {
