@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
+# ASCII-only file so a Pi paste does not turn dashes into garbage.
 """
-Block detector — detect.py (canonical race Python in this repo).
+Block detector - detect.py (canonical race Python in this repo).
 
 Official name: Block detector.
 Same source as wro_block_detector.py. On the Pi, paste into round2.py and
@@ -29,7 +30,7 @@ from collections import deque
 # CONFIG
 # ---------------------------------------------------------------------------
 ONNX_MODEL_PATH = "best_ncnn.onnx"
-MODEL_INPUT_SIZE = 224          # keep at 224 — this is what costs inference time
+MODEL_INPUT_SIZE = 224          # keep at 224 - this is what costs inference time
 CLASS_NAMES = {0: "green", 1: "red"}
 CONF_THRESHOLD = 0.55
 USE_CUDA_IF_AVAILABLE = False   # Pi is CPU; True only if you run this on a CUDA box
@@ -56,13 +57,13 @@ MIN_VOTES = 5
 CLEAR_HISTORY = 10              # consecutive CLEAR frames before we drop a waypoint
 LOCK_HOLD_FRAMES = 2            # STOP-height frames in a row before freeze (skip a spike)
 
-# Too close — abort / reverse.
+# Too close - abort / reverse.
 REVERSE_HEIGHT_PX = 80
 WAYPOINT_RESEND_S = 0.4         # re-send WAYPOINT while locked (USB often drops a one-shot)
 WAYPOINT_RESEND_WINDOW_S = 1.2  # then stop; ESP ignores extras after GOTO-C until CLEAR
 
 # ---------------------------------------------------------------------------
-# Waypoint geometry — measure AB_DISTANCE_CM on the table at STOP_HEIGHT_PX
+# Waypoint geometry - measure AB_DISTANCE_CM on the table at AB_CAL_HEIGHT_PX
 # ---------------------------------------------------------------------------
 # When box height hits this, treat current robot pose as B and the block as A.
 # Start at 45 px (closer, tighter arc). If the turn to C is too sharp after a
@@ -70,16 +71,13 @@ WAYPOINT_RESEND_WINDOW_S = 1.2  # then stop; ESP ignores extras after GOTO-C unt
 STOP_HEIGHT_PX = 30  # freeze A/B/C and send WAYPOINT at this box height
 
 # AC: nudge of robot CENTER toward the pass side (red +X, green -X).
-# Field: 10 cm worked. C finishes *before* the block (heading exit), not
-# beside it. 20 cm was "middle of the 40 cm gap when level with the pillar"
-# and is the wrong model if GOTO-C ends early. Mid-path after the arc is
-# the 1 s L/R recenter, not a large AC.
-AC_OFFSET_CM = 10.0
+# Field: 10 cm sideways. Depth of C follows A (see AB_CAL_HEIGHT_PX).
+AC_OFFSET_CM = 12.0
 
 # AB: tape AB_DISTANCE_CM at AB_CAL_HEIGHT_PX (original 40 cm at 45 px).
 # Lock is STOP_HEIGHT_PX=30, which is farther than 45 px. Using STOP in the
 # scale made y_A=40 cm and C sat well in front of the block. Depth is
-# AB * (cal_height / box_height) → ~60 cm at a 30 px freeze.
+# AB * (cal_height / box_height) ~= 60 cm at a 30 px freeze.
 AB_DISTANCE_CM = 40.0
 AB_CAL_HEIGHT_PX = 45  # pixel height when AB_DISTANCE_CM was measured
 # If you retape AB at 30 px, set AB_CAL_HEIGHT_PX = 30 and AB_DISTANCE_CM to that tape.
@@ -104,7 +102,7 @@ def load_onnx_session(model_path: str) -> tuple:
     return session, input_name, output_names
 
 # ---------------------------------------------------------------------------
-# Preprocessing — letterbox to a square, track scale/offset to map boxes back
+# Preprocessing - letterbox to a square, track scale/offset to map boxes back
 # ---------------------------------------------------------------------------
 def preprocess(frame: np.ndarray, size: int) -> tuple:
     h, w = frame.shape[:2]
@@ -122,7 +120,7 @@ def preprocess(frame: np.ndarray, size: int) -> tuple:
     return np.ascontiguousarray(tensor), scale, left, top
 
 # ---------------------------------------------------------------------------
-# Postprocessing — decode Ultralytics-style output + NMS, map back to frame
+# Postprocessing - decode Ultralytics-style output + NMS, map back to frame
 # ---------------------------------------------------------------------------
 def decode_onnx_output(raw_output: np.ndarray, scale: float, left: int, top: int,
                         conf_thresh: float) -> dict:
@@ -177,7 +175,7 @@ def block_to_robot_xy(box: dict, frame_size: int) -> tuple:
     # 640x480 squeezed to a square: width pixels are stretched vs height pixels.
     x_aspect = CAPTURE_W / float(CAPTURE_H)
 
-    # Depth from the taped AB at AB_CAL_HEIGHT_PX (not STOP_HEIGHT — 30 px is farther).
+    # Depth from the taped AB at AB_CAL_HEIGHT_PX (not STOP_HEIGHT; 30 px is farther).
     y_a = AB_DISTANCE_CM * (AB_CAL_HEIGHT_PX / float(h))
 
     # Lateral from similar triangles, using real pillar height vs box height.
@@ -310,7 +308,7 @@ def draw_boxes(frame_bgr: np.ndarray, red_box: dict, green_box: dict) -> np.ndar
     return out
 
 # ---------------------------------------------------------------------------
-# Camera capture (OpenCV — more reliable on Pi USB webcams than PyAV)
+# Camera capture (OpenCV - more reliable on Pi USB webcams than PyAV)
 # ---------------------------------------------------------------------------
 def resize_frame(frame: np.ndarray, target_w: int = 240, target_h: int = 240) -> np.ndarray:
     if frame is None or frame.size == 0:
@@ -450,7 +448,7 @@ def ascii_only(text: str) -> str:
 
 
 def start_esp_log_thread(ser, stop_flag):
-    """Read ESP telemetry (MODE: GOTO-C, PI: STOP, …) into the same log."""
+    """Read ESP telemetry (MODE: GOTO-C, PI: STOP, ...) into the same log."""
 
     def loop():
         buf = ""
@@ -542,7 +540,7 @@ def main(camera_id: int = CAMERA_ID, frame_size: int = FRAME_SIZE):
         print("No frames received from camera!")
         print("Run:  pkill -f detect.py ; sudo fuser -k /dev/video0")
         print("Unplug the Lenovo cam, plug it into a USB 2 port (not blue USB 3).")
-        print("Do not set CAMERA_ID = 1 — that is UVC metadata, not the picture.")
+        print("Do not set CAMERA_ID = 1 - that is UVC metadata, not the picture.")
         stop_flag.set()
         t.join(timeout=2.0)
         if cam.get("cap") is not None:
@@ -648,7 +646,7 @@ def main(camera_id: int = CAMERA_ID, frame_size: int = FRAME_SIZE):
 
             now = time.time()
             if ser is None and frame_count % 30 == 0:
-                print("Serial is NOT open — ESP will never STOP/WAYPOINT. Check /dev/ttyUSB*", flush=True)
+                print("Serial is NOT open - ESP will never STOP/WAYPOINT. Check /dev/ttyUSB*", flush=True)
 
             try:
                 if ser is not None and decision == "REVERSE" and active_box is not None:

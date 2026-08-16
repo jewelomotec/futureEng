@@ -93,7 +93,7 @@ Robot frame at the freeze: **B = (0, 0)**, **+X right**, **+Y forward**.
 | `STOP_HEIGHT_PX` | 30 | Freeze A,B,C and send WAYPOINT |
 | `AB_DISTANCE_CM` | 40 | Taped depth at **`AB_CAL_HEIGHT_PX` (45)**, not at the 30 px lock |
 | `AB_CAL_HEIGHT_PX` | 45 | Height when AB was taped. At a 30 px freeze, Y ≈ 60 cm so C is beside the block |
-| `AC_OFFSET_CM` | 10 | Pass-side nudge of robot center (field: 10 worked). Not “sit 20 cm beside the pillar” |
+| `AC_OFFSET_CM` | 12 | Pass-side nudge (matches the Pi file you are running) |
 | `REAL_BLOCK_HEIGHT_CM` | 10 | Real pillar height (cm), for left/right position |
 | `REVERSE_HEIGHT_PX` | 80 | Too close → `REVERSE` |
 | `CONF_THRESHOLD` | 0.55 | ONNX score gate |
