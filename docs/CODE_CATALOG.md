@@ -148,7 +148,7 @@ vote 5 of 7 frames, freeze A/B/C at `STOP_HEIGHT_PX`, send `STOP` then
 | `SERIAL_PORTS` | USB0, USB1, AMA0 | First that opens |
 | `STOP_HEIGHT_PX` | 30 | Freeze waypoint |
 | `AB_DISTANCE_CM` | 40 | Taped depth at that pixel height |
-| `AC_OFFSET_CM` | 12 | Pass offset (red +X, green −X) |
+| `AC_OFFSET_CM` | 20 | Pass offset (red +X, green −X). 40 cm gap, 25 cm bot |
 | `REVERSE_HEIGHT_PX` | 80 | Too close → `REVERSE` |
 | `WAYPOINT_RESEND_S` | 0.4 | Retry interval |
 | `WAYPOINT_RESEND_WINDOW_S` | 1.2 | Then stop sending until CLEAR |

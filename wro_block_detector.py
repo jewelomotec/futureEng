@@ -62,9 +62,11 @@ WAYPOINT_RESEND_WINDOW_S = 1.2  # then stop; ESP ignores extras after GOTO-C unt
 # run, drop this to 30 so the bot stops farther away and the arc is gentler.
 STOP_HEIGHT_PX = 30  # freeze A/B/C and send WAYPOINT at this box height
 
-# AC: how far beside the block to pass. Red → +X (robot's right), green → -X.
-# 25 put C through the pass-side wall; 12 keeps the pass closer to the pillar.
-AC_OFFSET_CM = 12.0
+# AC: robot CENTER beside the block (red +X, green -X).
+# Pass gap block→wall is 40 cm; bot is 25 cm wide (12.5 cm half).
+# C is the centerline: 12 clips the pillar, 25 leaves only ~2.5 cm to the wall.
+# 20 cm = middle of the 40 cm path (~7.5 cm clearance each side).
+AC_OFFSET_CM = 20.0
 
 # AB: forward distance (cm) from robot to block when height is STOP_HEIGHT_PX.
 # Tape this at the SAME height you use above. If you change 45 → 30, measure AB
