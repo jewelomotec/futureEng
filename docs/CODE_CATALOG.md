@@ -127,7 +127,7 @@ open Serial Monitor while the Pi owns `/dev/ttyUSB0`.
 runs a pasted copy named **`round2.py`**.
 
 **Job:** Open Lenovo webcam (`/dev/video0` picture node), run `best_ncnn.onnx`,
-vote 5 of 7 frames, freeze A/B/C at `STOP_HEIGHT_PX`, send `STOP` then
+vote 5 of 7 frames, median box, 2 frames at `STOP_HEIGHT_PX`, freeze A/B/C, send `STOP` then
 `WAYPOINT` on USB 115200. Log Pi prints and ESP lines to `wro_detect.log`.
 
 **Does not:** Steer the servo or read LiDAR. Does not send `RED`/`GREEN`
@@ -147,6 +147,7 @@ vote 5 of 7 frames, freeze A/B/C at `STOP_HEIGHT_PX`, send `STOP` then
 | `CAMERA_FPS` | 15 | Avoid Pi 5 USB3 overruns |
 | `SERIAL_PORTS` | USB0, USB1, AMA0 | First that opens |
 | `STOP_HEIGHT_PX` | 30 | Freeze waypoint |
+| `LOCK_HOLD_FRAMES` | 2 | Consecutive STOP-height frames before freeze |
 | `AB_DISTANCE_CM` | 40 | Taped depth at that pixel height |
 | `AC_OFFSET_CM` | 10 | Pass-side nudge (field-tested). C often earlier than the block |
 | `REVERSE_HEIGHT_PX` | 80 | Too close → `REVERSE` |
@@ -166,6 +167,7 @@ vote 5 of 7 frames, freeze A/B/C at `STOP_HEIGHT_PX`, send `STOP` then
 | `pass_point_c` | C = A ± `AC_OFFSET_CM` |
 | `arc_b_to_c` | Circle through B and C, tangent to +Y: `R`, `theta`, `arc_len` |
 | `compute_waypoint` | Freeze A, B, C, arc, and the pixel box |
+| `median_detection_box` | Median of last 5 hits — freeze A from this, not a spike |
 | `format_waypoint_line` | `WAYPOINT,color,xa,ya,xc,yc,R,theta,arclen` |
 | `print_waypoint` | Human A/B/C dump |
 | `open_opencv_camera` | V4L2 MJPG 640×480 15 fps |

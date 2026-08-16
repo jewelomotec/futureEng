@@ -35,10 +35,10 @@ USB serial (115200) is for the Pi only. Debug `MODE:` lines also go to USB — d
 ### Blocks (Pi + ESP)
 
 1. Pi must see the same colour in **5 of the last 7** frames (`CONF_THRESHOLD` 0.55).
-2. Box height **≥ 45 px** (try **30** if the pass is too sharp):
-   - Robot pose = **B**, block = **A**, pass point **C** = A shifted **10 cm** sideways (red → right, green → left). Field-tested; GOTO-C often finishes *before* the block. Mid-path in the 40 cm gap is the post-C recenter, not a large AC.
+2. Box height **≥ 30 px** for **2 frames** (median of last 5 hits, not a one-frame spike):
+   - Robot pose = **B**, block = **A**, pass point **C** = A shifted **10 cm** sideways (red → right, green → left).
    - Pi sends `STOP,...` then `WAYPOINT,...`.
-3. ESP sits **400 ms**, then drives **forward** to C (`MODE: GOTO-C`) with servo from radius **R**. IMU exits when heading is within **12°** of (heading at stop + theta).
+3. ESP sits **400 ms**, then drives **forward** to C (`MODE: GOTO-C`) with servo from radius **R**. Exit after **~3/4 of the arc time** if heading is within **12°**, or after the full `arc_len / 30 cm/s` time (4 s cap). Do not quit at 12° after only 250 ms.
 4. Then PID on the **heading from before the stop**. No S-curve. Extra `STOP` can restart the hold; `CLEAR` can abort an arc still running.
 5. When the block is gone for **10** frames, Pi sends `CLEAR`.
 6. Height **&gt; 80 px**: Pi sends `REVERSE` → ESP backs up at −80 until `CLEAR` or 5 s.
@@ -214,7 +214,7 @@ Race finish (`ROBOT_STOPPED`) is not a Pi command; it is the 12-turn + boxed-in 
 1. Parse `R`, `theta`, `arc_len`.
 2. Target heading = heading at `STOP` **+ theta** (BNO heading increases on a right turn).
 3. Servo from `atan(WHEELBASE_CM / |R|)`, clamped to `DIFF`, inverted if `INVERT_STEERING`.
-4. Sit 400 ms, then drive forward at 120 until heading is close, or `WAYPOINT_MAX_MS` (4 s).
+4. Sit 400 ms, then drive the arc. Exit at 12° **only after ~75% of expected arc time**, or when that time is fully up, or at 4 s.
 5. Center wheels; `straightTargetHeading` = heading from before the stop.
 
 This sketch is **round1_2026 with Bluetooth removed**. There is no `SerialBT`. Extra `STOP` restarts the hold. `CLEAR` can abort `GOTO-C`.

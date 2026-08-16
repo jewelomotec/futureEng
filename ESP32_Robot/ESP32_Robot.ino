@@ -119,7 +119,7 @@ unsigned long arcStartTime = 0;
 // Pi sends STOP then WAYPOINT,color,xa,ya,xc,yc,R,theta,arclen
 float WHEELBASE_CM = 13.0;                 // axle-to-axle cm (this bot; 600 rpm N20)
 unsigned long WAYPOINT_PAUSE_MS = 400;     // stand still after STOP before driving to C
-float WAYPOINT_EXIT_DEG = 12.0;            // IMU heading error that counts as "arrived" (ends GOTO-C sooner than 8)
+float WAYPOINT_EXIT_DEG = 12.0;            // heading close enough to C — only after most of the arc time
 unsigned long WAYPOINT_MIN_MS = 250;
 unsigned long WAYPOINT_MAX_MS = 4000;
 float ESTIMATED_FWD_CMS = 30.0;            // rough cm/s at STRAIGHT_SPEED — backup timer
@@ -763,18 +763,23 @@ void executeWaypointArc(float currentHeading) {
   unsigned long elapsed = millis() - waypointArcStart;
 
   bool headingClose = abs(angleDifference) <= WAYPOINT_EXIT_DEG;
-  bool minTime = elapsed >= WAYPOINT_MIN_MS;
-  bool maxTime = elapsed >= WAYPOINT_MAX_MS;
 
-  unsigned long expectedMs = 1000;
+  unsigned long expectedMs = WAYPOINT_MIN_MS;
   if (ESTIMATED_FWD_CMS > 1.0 && waypointArcLenCm > 0.0) {
     expectedMs = (unsigned long)(1000.0 * waypointArcLenCm / ESTIMATED_FWD_CMS);
     if (expectedMs < WAYPOINT_MIN_MS) expectedMs = WAYPOINT_MIN_MS;
     if (expectedMs > WAYPOINT_MAX_MS) expectedMs = WAYPOINT_MAX_MS;
   }
-  bool distanceGuess = elapsed >= expectedMs && headingClose;
+  // Do not quit at 12° after only 250 ms — that stopped short of C.
+  // Finish ~3/4 of the arc time, then 12° may end it; else run the full time.
+  unsigned long minArcMs = (expectedMs * 3UL) / 4UL;
+  if (minArcMs < WAYPOINT_MIN_MS) minArcMs = WAYPOINT_MIN_MS;
 
-  if ((minTime && headingClose) || distanceGuess || maxTime) {
+  bool headingAtC = headingClose && (elapsed >= minArcMs);
+  bool timeAtC = elapsed >= expectedMs;
+  bool maxTime = elapsed >= WAYPOINT_MAX_MS;
+
+  if (headingAtC || timeAtC || maxTime) {
     steeringServo.write(SERVO_CENTER);
     finalServoAngle = SERVO_CENTER;
     beginAfterCPause();

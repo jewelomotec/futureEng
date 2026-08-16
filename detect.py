@@ -54,6 +54,7 @@ LOG_NAME = "wro_detect.log"     # Pi prints + ESP serial, next to this script
 VOTE_HISTORY = 7
 MIN_VOTES = 5
 CLEAR_HISTORY = 10              # consecutive CLEAR frames before we drop a waypoint
+LOCK_HOLD_FRAMES = 2            # STOP-height frames in a row before freeze (skip a spike)
 
 # Too close — abort / reverse.
 REVERSE_HEIGHT_PX = 80
@@ -212,6 +213,28 @@ def arc_b_to_c(x_c: float, y_c: float) -> dict:
         "arc_len_cm": arc_len,
         "turn": "right" if radius > 0 else "left",
         "chord_cm": dist,
+    }
+
+
+def median_detection_box(hist) -> dict | None:
+    """Median box over the last MIN_VOTES hits so A/C is not one noisy frame."""
+    boxes = [b for b in hist if b is not None]
+    if not boxes:
+        return None
+    use = boxes[-min(len(boxes), MIN_VOTES) :]
+
+    def med(key):
+        xs = sorted(b[key] for b in use)
+        return xs[len(xs) // 2]
+
+    return {
+        "x": int(med("x")),
+        "y": int(med("y")),
+        "width": int(med("width")),
+        "height": int(med("height")),
+        "center_x": int(med("center_x")),
+        "center_y": int(med("center_y")),
+        "confidence": max(float(b["confidence"]) for b in use),
     }
 
 
@@ -519,16 +542,7 @@ def main(camera_id: int = CAMERA_ID, frame_size: int = FRAME_SIZE):
     waypoint_lock_time = 0.0
     last_wp_send_time = 0.0
     sent_stop_for_lock = False
-
-    def latest_box(hist):
-        for b in reversed(hist):
-            if b is not None:
-                return b
-        return None
-
-    def hist_max_height(hist):
-        hs = [b["height"] for b in hist if b is not None]
-        return max(hs) if hs else 0
+    stop_streak = 0
 
     def serial_write(line: str) -> None:
         ser.write(line.encode("ascii"))
@@ -550,8 +564,8 @@ def main(camera_id: int = CAMERA_ID, frame_size: int = FRAME_SIZE):
 
             red_confirmed = confirmed(red_hist)
             green_confirmed = confirmed(green_hist)
-            red_stable = latest_box(red_hist) if red_confirmed else None
-            green_stable = latest_box(green_hist) if green_confirmed else None
+            red_stable = median_detection_box(red_hist) if red_confirmed else None
+            green_stable = median_detection_box(green_hist) if green_confirmed else None
 
             primary_box = None
             primary_color = None
@@ -575,17 +589,23 @@ def main(camera_id: int = CAMERA_ID, frame_size: int = FRAME_SIZE):
             active_box = None
 
             if primary_box is not None:
-                color_hist = red_hist if primary_color == "red" else green_hist
-                block_height = max(primary_box["height"], hist_max_height(color_hist))
+                block_height = int(primary_box["height"])
                 if block_height > REVERSE_HEIGHT_PX:
                     decision = "REVERSE"
                     active_box = primary_box
+                    stop_streak = 0
                 elif block_height >= STOP_HEIGHT_PX:
-                    decision = "STOP"
-                    active_box = primary_box
+                    stop_streak += 1
+                    if stop_streak >= LOCK_HOLD_FRAMES:
+                        decision = "STOP"
+                        active_box = primary_box
+                else:
+                    stop_streak = 0
+            else:
+                stop_streak = 0
 
-            # Freeze A/B/C once at STOP_HEIGHT_PX. Stay locked even if height
-            # dips under 45 for a few frames (that used to send CLEAR and abort the ESP).
+            # Freeze A/B/C from the median box, not a one-frame height spike.
+            # Stay locked even if height dips (that used to CLEAR and abort the ESP).
             if decision == "STOP" and waypoint_lock is None and active_box is not None and primary_color:
                 waypoint_lock = compute_waypoint(active_box, primary_color, frame_size)
                 print_waypoint(waypoint_lock)
@@ -595,6 +615,7 @@ def main(camera_id: int = CAMERA_ID, frame_size: int = FRAME_SIZE):
             elif decision == "REVERSE":
                 waypoint_lock = None
                 sent_stop_for_lock = False
+                stop_streak = 0
             elif waypoint_lock is not None and (red_confirmed or green_confirmed):
                 decision = "STOP"
                 active_box = active_box or waypoint_lock.get("box")
@@ -603,6 +624,7 @@ def main(camera_id: int = CAMERA_ID, frame_size: int = FRAME_SIZE):
             if decision == "CLEAR" and clear_counter >= CLEAR_HISTORY:
                 waypoint_lock = None
                 sent_stop_for_lock = False
+                stop_streak = 0
 
             now = time.time()
             if ser is None and frame_count % 30 == 0:
@@ -656,10 +678,11 @@ def main(camera_id: int = CAMERA_ID, frame_size: int = FRAME_SIZE):
             )
 
             if waypoint_lock is not None:
+                xa, ya = waypoint_lock["A_cm"]
                 xc, yc = waypoint_lock["C_cm"]
                 cv2.putText(
                     display,
-                    f"STOP {waypoint_lock['color']} C=({xc:.0f},{yc:.0f})cm",
+                    f"{waypoint_lock['color']} A=({xa:.0f},{ya:.0f}) C=({xc:.0f},{yc:.0f}) th={waypoint_lock['theta_deg']:.0f}",
                     (2, frame_size - 24),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 255, 255), 1,
                 )
