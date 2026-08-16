@@ -91,7 +91,8 @@ Robot frame at the freeze: **B = (0, 0)**, **+X right**, **+Y forward**.
 | Variable | Default | Meaning |
 |---|---|---|
 | `STOP_HEIGHT_PX` | 30 | Freeze A,B,C and send WAYPOINT |
-| `AB_DISTANCE_CM` | 40 | Tape **forward** distance to the pillar **at that same pixel height** |
+| `AB_DISTANCE_CM` | 40 | Taped depth at **`AB_CAL_HEIGHT_PX` (45)**, not at the 30 px lock |
+| `AB_CAL_HEIGHT_PX` | 45 | Height when AB was taped. At a 30 px freeze, Y ≈ 60 cm so C is beside the block |
 | `AC_OFFSET_CM` | 10 | Pass-side nudge of robot center (field: 10 worked). Not “sit 20 cm beside the pillar” |
 | `REAL_BLOCK_HEIGHT_CM` | 10 | Real pillar height (cm), for left/right position |
 | `REVERSE_HEIGHT_PX` | 80 | Too close → `REVERSE` |
@@ -102,7 +103,7 @@ Robot frame at the freeze: **B = (0, 0)**, **+X right**, **+Y forward**.
 | `CAMERA_FPS` | 15 | Lower than 30 to avoid Pi 5 USB3 xHCI overruns |
 | `SERIAL_PORTS` | USB0, USB1, AMA0 | First port that opens wins |
 
-If you change 45 → 30, **remeasure `AB_DISTANCE_CM`**. Keeping 40 cm at 30 px makes C too close and the arc stays tight.
+Depth is `AB_DISTANCE_CM * (AB_CAL_HEIGHT_PX / box_height)`. A 30 px lock with a 45 px / 40 cm tape puts A/C about **60 cm** ahead. Using 40 cm at 30 px made C sit in front of the block.
 
 640×480 squeezed to 240×240 stretches width vs height; the script corrects lateral cm with `CAPTURE_W / CAPTURE_H`.
 
@@ -227,7 +228,7 @@ If the pass is too wide (not enough curve), **raise** `WHEELBASE_CM`. Too tight:
 
 1. Straight: `SERVO_CENTER` so it does not drift; then PID if needed.
 2. Walls: `FRONT_TURN_DISTANCE` 15 cm, then `ARC_SERVO_ANGLE` / pause / exit.
-3. Blocks: tape `AB_DISTANCE_CM` at **30 px** (the lock height). Then `AC_OFFSET_CM`.
+3. Blocks: `AB_CAL_HEIGHT_PX` must match the tape. Or retape `AB_DISTANCE_CM` at 30 px and set `AB_CAL_HEIGHT_PX = 30`.
 4. ESP `WHEELBASE_CM` last, only if C is right but the curve is too soft/hard.
 
 ---

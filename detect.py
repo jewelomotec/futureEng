@@ -70,19 +70,19 @@ WAYPOINT_RESEND_WINDOW_S = 1.2  # then stop; ESP ignores extras after GOTO-C unt
 STOP_HEIGHT_PX = 30  # freeze A/B/C and send WAYPOINT at this box height
 
 # AC: nudge of robot CENTER toward the pass side (red +X, green -X).
-# Field: 10 cm worked. C finishes *before* the block (heading exit), not
-# beside it. 20 cm was "middle of the 40 cm gap when level with the pillar"
-# and is the wrong model if GOTO-C ends early. Mid-path after the arc is
-# the 1 s L/R recenter, not a large AC.
+# Field: 10 cm sideways. Depth of C follows A (see AB_CAL_HEIGHT_PX).
 AC_OFFSET_CM = 10.0
 
-# AB: forward distance (cm) from robot to block when height is STOP_HEIGHT_PX.
-# Tape this at the SAME height you use above. If you change 45 → 30, measure AB
-# again — do not keep the 45 px distance or C will be computed too close.
+# AB: tape AB_DISTANCE_CM at AB_CAL_HEIGHT_PX (original 40 cm at 45 px).
+# Lock is STOP_HEIGHT_PX=30, which is farther than 45 px. Using STOP in the
+# scale made y_A=40 cm and C sat well in front of the block. Depth is
+# AB * (cal_height / box_height) → ~60 cm at a 30 px freeze.
 AB_DISTANCE_CM = 40.0
+AB_CAL_HEIGHT_PX = 45  # pixel height when AB_DISTANCE_CM was measured
+# If you retape AB at 30 px, set AB_CAL_HEIGHT_PX = 30 and AB_DISTANCE_CM to that tape.
 
 # Real pillar height in cm (WRO traffic-sign / pillar). Used only for lateral (X)
-# similar-triangles. Depth Y uses AB_DISTANCE_CM scaled by STOP_HEIGHT_PX/height.
+# Depth Y uses AB_DISTANCE_CM scaled by AB_CAL_HEIGHT_PX/height.
 REAL_BLOCK_HEIGHT_CM = 10.0
 
 # ---------------------------------------------------------------------------
@@ -174,8 +174,8 @@ def block_to_robot_xy(box: dict, frame_size: int) -> tuple:
     # 640x480 squeezed to a square: width pixels are stretched vs height pixels.
     x_aspect = CAPTURE_W / float(CAPTURE_H)
 
-    # Depth from the calibrated AB at STOP_HEIGHT_PX, scaled if we trigger late/early.
-    y_a = AB_DISTANCE_CM * (STOP_HEIGHT_PX / float(h))
+    # Depth from the taped AB at AB_CAL_HEIGHT_PX (not STOP_HEIGHT — 30 px is farther).
+    y_a = AB_DISTANCE_CM * (AB_CAL_HEIGHT_PX / float(h))
 
     # Lateral from similar triangles, using real pillar height vs box height.
     x_a = (cx - ccx) * x_aspect * (REAL_BLOCK_HEIGHT_CM / float(h))

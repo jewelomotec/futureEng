@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
 """
-Block detector (GitHub name) — wro_block_detector.py
+Block detector — detect.py (canonical race Python in this repo).
 
-Official name: Block detector, GitHub filename.
-Identical to detect.py. Use either file as the source to paste into round2.py
-on the Pi. Named inventory: docs/CODE_CATALOG.md
+Official name: Block detector.
+Same source as wro_block_detector.py. On the Pi, paste into round2.py and
+start with systemd unit round2 (deploy/round2.service).
+
+Runs on the Raspberry Pi: Lenovo webcam + best_ncnn.onnx, votes 5/7 frames,
+freezes A/B/C at STOP_HEIGHT_PX, sends STOP then WAYPOINT (also REVERSE/CLEAR)
+at 115200 to ESP32_Robot.ino. Logs to wro_detect.log.
+
+Does not steer or read LiDAR. Named inventory: docs/CODE_CATALOG.md
 """
 
 import math
@@ -70,13 +76,16 @@ STOP_HEIGHT_PX = 30  # freeze A/B/C and send WAYPOINT at this box height
 # the 1 s L/R recenter, not a large AC.
 AC_OFFSET_CM = 10.0
 
-# AB: forward distance (cm) from robot to block when height is STOP_HEIGHT_PX.
-# Tape this at the SAME height you use above. If you change 45 → 30, measure AB
-# again — do not keep the 45 px distance or C will be computed too close.
+# AB: tape AB_DISTANCE_CM at AB_CAL_HEIGHT_PX (original 40 cm at 45 px).
+# Lock is STOP_HEIGHT_PX=30, which is farther than 45 px. Using STOP in the
+# scale made y_A=40 cm and C sat well in front of the block. Depth is
+# AB * (cal_height / box_height) → ~60 cm at a 30 px freeze.
 AB_DISTANCE_CM = 40.0
+AB_CAL_HEIGHT_PX = 45  # pixel height when AB_DISTANCE_CM was measured
+# If you retape AB at 30 px, set AB_CAL_HEIGHT_PX = 30 and AB_DISTANCE_CM to that tape.
 
 # Real pillar height in cm (WRO traffic-sign / pillar). Used only for lateral (X)
-# similar-triangles. Depth Y uses AB_DISTANCE_CM scaled by STOP_HEIGHT_PX/height.
+# Depth Y uses AB_DISTANCE_CM scaled by AB_CAL_HEIGHT_PX/height.
 REAL_BLOCK_HEIGHT_CM = 10.0
 
 # ---------------------------------------------------------------------------
@@ -168,8 +177,8 @@ def block_to_robot_xy(box: dict, frame_size: int) -> tuple:
     # 640x480 squeezed to a square: width pixels are stretched vs height pixels.
     x_aspect = CAPTURE_W / float(CAPTURE_H)
 
-    # Depth from the calibrated AB at STOP_HEIGHT_PX, scaled if we trigger late/early.
-    y_a = AB_DISTANCE_CM * (STOP_HEIGHT_PX / float(h))
+    # Depth from the taped AB at AB_CAL_HEIGHT_PX (not STOP_HEIGHT — 30 px is farther).
+    y_a = AB_DISTANCE_CM * (AB_CAL_HEIGHT_PX / float(h))
 
     # Lateral from similar triangles, using real pillar height vs box height.
     x_a = (cx - ccx) * x_aspect * (REAL_BLOCK_HEIGHT_CM / float(h))

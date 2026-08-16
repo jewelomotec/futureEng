@@ -148,7 +148,8 @@ vote 5 of 7 frames, median box, 2 frames at `STOP_HEIGHT_PX`, freeze A/B/C, send
 | `SERIAL_PORTS` | USB0, USB1, AMA0 | First that opens |
 | `STOP_HEIGHT_PX` | 30 | Freeze waypoint |
 | `LOCK_HOLD_FRAMES` | 2 | Consecutive STOP-height frames before freeze |
-| `AB_DISTANCE_CM` | 40 | Taped depth at that pixel height |
+| `AB_DISTANCE_CM` | 40 | Taped depth at `AB_CAL_HEIGHT_PX` |
+| `AB_CAL_HEIGHT_PX` | 45 | Scale for Y; 30 px lock → ~60 cm |
 | `AC_OFFSET_CM` | 10 | Pass-side nudge (field-tested). C often earlier than the block |
 | `REVERSE_HEIGHT_PX` | 80 | Too close → `REVERSE` |
 | `WAYPOINT_RESEND_S` | 0.4 | Retry interval |

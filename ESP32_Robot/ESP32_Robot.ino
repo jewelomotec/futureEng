@@ -795,12 +795,8 @@ void executeWaypointArc(float currentHeading) {
     if (expectedMs < WAYPOINT_MIN_MS) expectedMs = WAYPOINT_MIN_MS;
     if (expectedMs > WAYPOINT_MAX_MS) expectedMs = WAYPOINT_MAX_MS;
   }
-  // Do not quit at 12° after only 250 ms — that stopped short of C.
-  // Finish ~3/4 of the arc time, then 12° may end it; else run the full time.
-  unsigned long minArcMs = (expectedMs * 3UL) / 4UL;
-  if (minArcMs < WAYPOINT_MIN_MS) minArcMs = WAYPOINT_MIN_MS;
-
-  bool headingAtC = headingClose && (elapsed >= minArcMs);
+  // Drive the full arc-time guess. 75% + 12° stopped C well in front of the block.
+  bool headingAtC = headingClose && (elapsed >= expectedMs);
   bool timeAtC = elapsed >= expectedMs;
   bool maxTime = elapsed >= WAYPOINT_MAX_MS;
 
