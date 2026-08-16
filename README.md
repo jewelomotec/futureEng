@@ -30,7 +30,7 @@ LiDARs + IMU  ------------------------------>  ESP32  -->  motor + servo
 5. **First** corner: turn toward the side with more space (left vs right LiDAR). After that, **always that same direction**.
 6. After **12** turns, if left and right are both under 100 cm and front under 150 cm for 1 s → race stop.
 
-USB serial (115200) is for the Pi only. Debug `MODE:` lines also go to USB — do not open Serial Monitor while `detect.py` has the port.
+USB serial (115200) is for the Pi only. Debug `MODE:` lines print about 5 times/s. The ESP drops non-ASCII RX (boot junk) and prints `ESP ready 115200` after flushing the UART. Do not open Serial Monitor while `detect.py` has the port.
 
 ### Blocks (Pi + ESP)
 
