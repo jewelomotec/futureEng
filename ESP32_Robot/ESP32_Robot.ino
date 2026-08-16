@@ -68,6 +68,10 @@ unsigned long lastObstacleCmd = 0;             // timestamp of last RED/GREEN co
 const unsigned long OBSTACLE_TIMEOUT_MS = 5000; // auto-clear after 5s of no command
 const unsigned long TURN_COOLDOWN_MS = 1000; // how long to ignore front-wall checks after a turn
 const unsigned long AFTER_C_LIDAR_IGNORE_MS = 2000; // straighten onto the old heading before wall-turns
+unsigned long AFTER_C_PAUSE_MS = 400;              // sit at C before the rejoin (same idea as STOP pause)
+unsigned long REJOIN_MS = 800;                     // 2nd manoeuvre: slide back to the original lane
+int REJOIN_SERVO = 24;                             // extra steer toward that lane (green → right)
+unsigned long BLOCK_PASS_IGNORE_MS = 3500;         // do not start a second GOTO-C on the same pillar
 
 // Cardinal heading snap table — every commanded turn target is forced onto one of these,
 // so sensor noise/drift can never leave the robot aiming at something like 250°.
@@ -130,6 +134,9 @@ float waypointInitialArcLenCm = 0.0;
 float waypointXc = 0.0;
 float waypointYc = 0.0;
 int waypointServoAngle = 90;
+bool waypointPassRight = true;             // red = pass right (lane rejoin is left); green = pass left (rejoin right)
+unsigned long afterCPhaseStart = 0;
+unsigned long blockPassUntil = 0;          // ignore new STOP/WAYPOINT until this time / CLEAR
 unsigned long piHoldStart = 0;
 unsigned long waypointArcStart = 0;
 unsigned long waypointArcOrigin = 0;       // first GOTO-C start — max-time cap
@@ -165,6 +172,8 @@ enum RobotState {
   OBSTACLE_AVOIDING,
   PI_HOLD,
   WAYPOINT_ARC,
+  PI_AFTER_C_PAUSE,
+  PI_REJOIN,
   PI_REVERSE
 };
 RobotState currentState = DRIVING_STRAIGHT;
@@ -523,6 +532,25 @@ void resumeStraightDriving() {
   integralError = 0.0;
 }
 
+bool inPostCManeuver() {
+  return currentState == PI_AFTER_C_PAUSE || currentState == PI_REJOIN;
+}
+
+bool blockPassLatchActive() {
+  return millis() < blockPassUntil;
+}
+
+int servoWithOffset(bool steerRight, int offsetDeg) {
+  int offset = constrain(offsetDeg, 0, DIFF);
+  int angle;
+  if (INVERT_STEERING) {
+    angle = steerRight ? (SERVO_CENTER + offset) : (SERVO_CENTER - offset);
+  } else {
+    angle = steerRight ? (SERVO_CENTER - offset) : (SERVO_CENTER + offset);
+  }
+  return constrain(angle, SERVO_MAX_RIGHT, SERVO_MAX_LEFT);
+}
+
 unsigned long gotoExpectedMs(float arcLenCm) {
   unsigned long expectedMs = WAYPOINT_MIN_MS;
   if (ESTIMATED_FWD_CMS > 1.0 && arcLenCm > 0.0) {
@@ -565,8 +593,11 @@ void handlePiStop() {
   lastPiCmd = millis();
   // Duplicate STOP while already holding / arcing — do not clear waypointReady
   // or restart the 400 ms pause (Pi retransmits because USB drops packets).
-  if (currentState == PI_HOLD || currentState == WAYPOINT_ARC) {
+  if (currentState == PI_HOLD || currentState == WAYPOINT_ARC || inPostCManeuver()) {
     return;
+  }
+  if (blockPassLatchActive()) {
+    return;  // same pillar still in the camera — do not start a second GOTO-C
   }
   capturePathHeadingBeforeBlock();
   waypointStartHeading = getSmoothedHeading();
@@ -598,6 +629,13 @@ void handlePiWaypoint(String line) {
   }
   if (partCount < 9) {
     Serial.println("PI: WAYPOINT parse error");
+    return;
+  }
+
+  if (inPostCManeuver()) {
+    return;
+  }
+  if (blockPassLatchActive() && currentState != WAYPOINT_ARC) {
     return;
   }
 
@@ -640,6 +678,12 @@ void handlePiWaypoint(String line) {
 
   waypointServoAngle = servoAngleFromRadius(waypointRadiusCm);
   waypointReady = true;
+  {
+    String col = parts[1];
+    col.trim();
+    col.toLowerCase();
+    waypointPassRight = (col == "red");
+  }
 
   if (!sameShot) {
     Serial.print(liveUpdate ? "PI: GOTO-C retarget R=" : "PI: WAYPOINT R=");
@@ -659,7 +703,7 @@ void handlePiWaypoint(String line) {
 
 void handlePiReverse() {
   lastPiCmd = millis();
-  if (currentState == WAYPOINT_ARC) {
+  if (currentState == WAYPOINT_ARC || inPostCManeuver() || blockPassLatchActive()) {
     return;  // too-close REVERSE must not abort a pass already aimed at C
   }
   waypointReady = false;
@@ -669,14 +713,15 @@ void handlePiReverse() {
 }
 
 void handlePiClear() {
-  if (currentState == WAYPOINT_ARC) {
+  blockPassUntil = 0;
+  if (currentState == WAYPOINT_ARC || inPostCManeuver()) {
     // Detection flicker used to send CLEAR and abort the arc mid-turn.
     return;
   }
   if (currentState == OBSTACLE_AVOIDING || currentState == PI_HOLD ||
       currentState == PI_REVERSE) {
     if (currentState == PI_HOLD) {
-      straightTargetHeading = waypointStartHeading;
+      straightTargetHeading = pathHeadingCaptured ? pathHeadingBeforeBlock : waypointStartHeading;
     }
     resumeStraightDriving();
     Serial.println("PI: CLEAR — returning to path");
@@ -702,12 +747,14 @@ void handlePiLine(String line) {
   } else if (name == "CLEAR") {
     handlePiClear();
   } else if (name == "RED") {
+    if (currentState == WAYPOINT_ARC || inPostCManeuver() || blockPassLatchActive()) return;
     avoidDirectionRight = true;
     currentState = OBSTACLE_AVOIDING;
     lastObstacleCmd = millis();
     lastPiCmd = millis();
     Serial.println("OBSTACLE: RED - Swerving RIGHT");
   } else if (name == "GREEN") {
+    if (currentState == WAYPOINT_ARC || inPostCManeuver() || blockPassLatchActive()) return;
     avoidDirectionRight = false;
     currentState = OBSTACLE_AVOIDING;
     lastObstacleCmd = millis();
@@ -731,7 +778,7 @@ void executePiHold() {
     rampArmedForThisPhase = false;
     Serial.println("PI: driving arc to C");
   } else if (!waypointReady && (millis() - piHoldStart > OBSTACLE_TIMEOUT_MS)) {
-    straightTargetHeading = waypointStartHeading;
+    straightTargetHeading = pathHeadingCaptured ? pathHeadingBeforeBlock : waypointStartHeading;
     resumeStraightDriving();
     Serial.println("PI: STOP timeout — no WAYPOINT, resuming");
   }
@@ -740,17 +787,61 @@ void executePiHold() {
 void finishGotoC(const char* why) {
   steeringServo.write(SERVO_CENTER);
   finalServoAngle = SERVO_CENTER;
-  // Rejoin the lane heading we were PID-holding before the Pi saw the block.
-  // Do not keep the arc-exit heading — that cuts across the path.
+  setMotorOutput(0);
   straightTargetHeading = pathHeadingCaptured ? pathHeadingBeforeBlock : waypointStartHeading;
-  unsigned long until = millis() + AFTER_C_LIDAR_IGNORE_MS;
+  unsigned long until = millis() + AFTER_C_LIDAR_IGNORE_MS + AFTER_C_PAUSE_MS + REJOIN_MS;
   if (until > turnCooldownUntil) turnCooldownUntil = until;
   frontConditionActive = false;
-  resumeStraightDriving();
+  blockPassUntil = millis() + BLOCK_PASS_IGNORE_MS;
+  afterCPhaseStart = millis();
+  currentState = PI_AFTER_C_PAUSE;
+  rampArmedForThisPhase = false;
   Serial.print("PI: arrived at C (");
   Serial.print(why);
-  Serial.print(") — STRAIGHT PID to pre-block heading ");
-  Serial.println(straightTargetHeading);
+  Serial.print(") — pause then rejoin heading ");
+  Serial.print(straightTargetHeading);
+  Serial.println(waypointPassRight ? " (red: path is left)" : " (green: path is right)");
+}
+
+void executeAfterCPause() {
+  setMotorOutput(0);
+  steeringServo.write(SERVO_CENTER);
+  finalServoAngle = SERVO_CENTER;
+  if (millis() - afterCPhaseStart >= AFTER_C_PAUSE_MS) {
+    afterCPhaseStart = millis();
+    currentState = PI_REJOIN;
+    rampArmedForThisPhase = false;
+    lastHeadingError = 0.0;
+    lastHeadingTime = millis();
+    integralError = 0.0;
+    Serial.println(waypointPassRight
+                     ? "PI: REJOIN — IMU path + left toward middle"
+                     : "PI: REJOIN — IMU path + right toward middle");
+  }
+}
+
+void executePiRejoin(float currentHeading) {
+  // Same heading PID as STRAIGHT, aimed at the lane from before the block.
+  driveStraightMode(currentHeading);
+
+  // After a green pass the robot is left of the original line. Heading lock
+  // alone stays parallel on that offset — pull right toward the middle.
+  // Red already unwinds left while straightening; do not add extra left.
+  if (!waypointPassRight) {
+    int towardMiddle = servoWithOffset(true, REJOIN_SERVO);  // right
+    if (INVERT_STEERING) {
+      finalServoAngle = max(finalServoAngle, towardMiddle);
+    } else {
+      finalServoAngle = min(finalServoAngle, towardMiddle);
+    }
+    finalServoAngle = constrain(finalServoAngle, SERVO_MAX_RIGHT, SERVO_MAX_LEFT);
+    steeringServo.write(finalServoAngle);
+  }
+
+  if (millis() - afterCPhaseStart >= REJOIN_MS) {
+    resumeStraightDriving();
+    Serial.println("PI: REJOIN done — STRAIGHT PID on pre-block heading");
+  }
 }
 
 void executeWaypointArc(float currentHeading) {
@@ -851,6 +942,8 @@ void printTelemetry(float currentHeading) {
   else if (currentState == OBSTACLE_AVOIDING) btPrint("MODE: AVOID   ");
   else if (currentState == PI_HOLD)           btPrint("MODE: PI-HOLD ");
   else if (currentState == WAYPOINT_ARC)      btPrint("MODE: GOTO-C  ");
+  else if (currentState == PI_AFTER_C_PAUSE)  btPrint("MODE: C-PAUSE ");
+  else if (currentState == PI_REJOIN)         btPrint("MODE: REJOIN  ");
   else if (currentState == PI_REVERSE)        btPrint("MODE: REVERSE ");
 
 
@@ -887,6 +980,11 @@ void printTelemetry(float currentHeading) {
     btPrint("° | Current: "); btPrint(currentHeading);
     btPrint("° | Delta: "); btPrint(abs(angleDifference));
     btPrint("°");
+  } else if (currentState == PI_REJOIN) {
+    btPrint(" | Path: "); btPrint(straightTargetHeading);
+    btPrint("° | Current: "); btPrint(currentHeading);
+    btPrint("° | Error: "); btPrint(headingError);
+    btPrint(waypointPassRight ? "° | pull=left" : "° | pull=right");
   }
 
 
@@ -1361,6 +1459,12 @@ void loop() {
   }
   else if (currentState == WAYPOINT_ARC) {
     executeWaypointArc(currentHeading);
+  }
+  else if (currentState == PI_AFTER_C_PAUSE) {
+    executeAfterCPause();
+  }
+  else if (currentState == PI_REJOIN) {
+    executePiRejoin(currentHeading);
   }
   else if (currentState == PI_REVERSE) {
     executePiReverse();
